@@ -1,0 +1,6 @@
+/workspace/build-static/CMakeFiles/rtdoctor_core.dir
+/workspace/build-static/CMakeFiles/rtdoctor.dir
+/workspace/build-static/CMakeFiles/rtdoctor_tests.dir
+/workspace/build-static/CMakeFiles/test.dir
+/workspace/build-static/CMakeFiles/edit_cache.dir
+/workspace/build-static/CMakeFiles/rebuild_cache.dir

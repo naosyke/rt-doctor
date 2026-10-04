@@ -1,0 +1,7 @@
+# ninja log v5
+2	426	1791126073601662825	CMakeFiles/rtdoctor.dir/src/main.cpp.o	d74db355721c31a9
+2	591	1791126073768364889	CMakeFiles/rtdoctor_core.dir/src/output.cpp.o	fee39729abcdb057
+1	1045	1791126074225289229	CMakeFiles/rtdoctor_core.dir/src/system_view.cpp.o	b3b5ac82a49490a0
+1	1997	1791126075177302825	CMakeFiles/rtdoctor_core.dir/src/checks.cpp.o	273e157a717a81dd
+1998	2015	1791126075196170451	librtdoctor_core.a	b2fab078fc76d883
+2015	2484	1791126075656571277	rtdoctor	94de2a451f5b3c33

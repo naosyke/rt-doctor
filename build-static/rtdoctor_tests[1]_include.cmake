@@ -1,0 +1,5 @@
+if(EXISTS "/workspace/build-static/rtdoctor_tests[1]_tests.cmake")
+  include("/workspace/build-static/rtdoctor_tests[1]_tests.cmake")
+else()
+  add_test(rtdoctor_tests_NOT_BUILT rtdoctor_tests_NOT_BUILT)
+endif()
