@@ -44,4 +44,4 @@ if [ ! -w "$prefix/bin" ] && [ "$(id -u)" != 0 ]; then sudo=sudo; fi
 $sudo mkdir -p "$prefix/bin"
 $sudo install -m 755 "$tmp/$name/rtdoctor" "$prefix/bin/rtdoctor"
 echo "Installed $("$prefix/bin/rtdoctor" --version) to $prefix/bin/rtdoctor"
-echo "Try: sudo rtdoctor check"
+echo "Try: sudo rtdoctor   (guided mode; docs: https://github.com/naosyke/rt-doctor/blob/main/docs/guide.md)"
