@@ -244,6 +244,8 @@ git push origin v0.4.0
 * [x] 対話モード（`sudo rtdoctor`）
 * [x] `rtdoctor latency` - CPU ごとの起床遅延の測定を内蔵（cyclictest 不要、`--trace` で原因も表示）
 
+開発の記録と、次にやることは [docs/status.md](docs/status.md) にまとめています。
+
 ## ライセンス
 
 [Apache License 2.0](LICENSE) のオープンソースです。商用も含めて、自由に使用・改変・配布できます。Copyright 2026 naosyke.
