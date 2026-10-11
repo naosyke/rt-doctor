@@ -4,6 +4,7 @@
 #include <map>
 #include <set>
 #include <sstream>
+#include <tuple>
 
 namespace rtdoctor {
 
@@ -15,6 +16,17 @@ std::string_view to_string(Status status) {
         case Status::Fail: return "FAIL";
     }
     return "?";
+}
+
+std::string_view to_string(Impact impact) {
+    switch (impact) {
+        case Impact::Unset: return "";
+        case Impact::Low: return "low";
+        case Impact::Medium: return "medium";
+        case Impact::High: return "high";
+        case Impact::Critical: return "critical";
+    }
+    return "";
 }
 
 namespace {
@@ -285,19 +297,37 @@ CheckResult check_swap(const SystemView& system) {
     if (!swaps) return {id, title, Status::Info, "unknown", "", ""};
     std::stringstream lines(*swaps);
     std::string line;
-    std::getline(lines, line);  // Header
-    std::vector<std::string> devices;
+    std::getline(lines, line);  // Header: Filename Type Size Used Priority (sizes in KiB)
+    std::string devices;
+    long long size_kib = 0, used_kib = 0;
     while (std::getline(lines, line)) {
         std::stringstream fields(line);
-        std::string device;
-        if (fields >> device) devices.push_back(device);
+        std::string device, type;
+        long long size = 0, used = 0;
+        if (!(fields >> device >> type >> size >> used)) continue;
+        devices += (devices.empty() ? "" : ", ") + device;
+        size_kib += size;
+        used_kib += used;
     }
     if (devices.empty()) return pass(id, title, "off");
-    std::string value;
-    for (const auto& device : devices) value += (value.empty() ? "" : ", ") + device;
-    return {id, title, Status::Warn, "on: " + value,
-            "A page of a real-time task that was swapped out takes milliseconds to read back on next access.",
-            "Lock real-time memory with mlockall(MCL_CURRENT | MCL_FUTURE), or disable swap (swapoff -a)."};
+
+    const auto mib = [](long long kib) { return std::to_string(kib / 1024) + " MiB"; };
+    const std::string value = "on: " + devices + " (" + mib(used_kib) + " used of " + mib(size_kib) + ")";
+    const std::string fix = "Lock real-time memory with mlockall(MCL_CURRENT | MCL_FUTURE), or disable swap (swapoff -a).";
+    if (used_kib == 0) {
+        CheckResult result{id, title, Status::Info, value,
+                           "Swap is configured but unused right now; it only matters once memory runs short, when "
+                           "pages of a real-time task could be swapped out and take milliseconds to read back.",
+                           fix};
+        result.impact = Impact::Low;
+        return result;
+    }
+    CheckResult result{id, title, Status::Warn, value,
+                       "Memory is being swapped out. A swapped-out page of a real-time task takes milliseconds to "
+                       "read back on its next access.",
+                       fix};
+    result.impact = Impact::Medium;
+    return result;
 }
 
 CheckResult check_clocksource(const SystemView& system) {
@@ -338,8 +368,40 @@ CheckResult check_memory_lock_limit(const ProcessLimits& limits) {
             "program CAP_IPC_LOCK."};
 }
 
+namespace {
+
+Impact default_impact(const std::string& id) {
+    static const std::map<std::string, Impact> impacts = {
+        {"kernel_preemption", Impact::High},     {"virtualization", Impact::Critical},
+        {"rt_priority_limit", Impact::High},     {"cpu_isolation", Impact::Medium},
+        {"irq_affinity", Impact::Medium},        {"cpu_frequency", Impact::Medium},
+        {"cpu_idle", Impact::Medium},            {"memory_lock_limit", Impact::Medium},
+        {"transparent_hugepages", Impact::Low},  {"swap", Impact::Low},
+        {"smt", Impact::Low},                    {"rt_throttling", Impact::Low},
+        {"clocksource", Impact::Low},
+    };
+    const auto it = impacts.find(id);
+    return it == impacts.end() ? Impact::Low : it->second;
+}
+
+}  // namespace
+
+std::vector<CheckResult> prioritized(const std::vector<CheckResult>& results) {
+    std::vector<std::pair<std::size_t, CheckResult>> findings;
+    for (std::size_t i = 0; i < results.size(); ++i) {
+        if (results[i].status == Status::Warn || results[i].status == Status::Fail) findings.emplace_back(i, results[i]);
+    }
+    std::stable_sort(findings.begin(), findings.end(), [](const auto& a, const auto& b) {
+        return std::make_tuple(-static_cast<int>(a.second.impact), -static_cast<int>(a.second.status), a.first) <
+               std::make_tuple(-static_cast<int>(b.second.impact), -static_cast<int>(b.second.status), b.first);
+    });
+    std::vector<CheckResult> ordered;
+    for (auto& finding : findings) ordered.push_back(std::move(finding.second));
+    return ordered;
+}
+
 std::vector<CheckResult> run_checks(const SystemView& system, const ProcessLimits& limits) {
-    return {
+    std::vector<CheckResult> results = {
         check_kernel_preemption(system),
         check_virtualization(system),
         check_cpu_isolation(system),
@@ -354,6 +416,10 @@ std::vector<CheckResult> run_checks(const SystemView& system, const ProcessLimit
         check_rt_priority_limit(limits),
         check_memory_lock_limit(limits),
     };
+    for (auto& result : results) {
+        if (result.impact == Impact::Unset) result.impact = default_impact(result.id);
+    }
+    return results;
 }
 
 }  // namespace rtdoctor

@@ -14,27 +14,47 @@ controller or an embedded board and run it.
 $ sudo rtdoctor check
 rt-doctor 0.1.0 - real-time readiness of this system
 
-  WARN  Kernel preemption model                  full preemption (not PREEMPT_RT)
+Summary
+  Biggest factor: Virtual machine - Docker Desktop (linuxkit)
+    As long as this system runs in a virtual machine, the hypervisor can pause it at any time. The
+    other fixes help, but cannot bring deadline misses to zero; measure on bare metal.
+  Then: Kernel preemption model (high), Isolated CPUs (medium), Transparent huge pages (low)
+
+Checks
+  WARN high     Kernel preemption model                  full preemption (not PREEMPT_RT)
         Why: Most kernel code can be preempted, but interrupt handlers, softirqs and spinlocks still
             run without preemption; worst-case latencies are typically hundreds of microseconds to
             milliseconds.
         Fix: Use a PREEMPT_RT kernel (mainline since Linux 6.12: CONFIG_PREEMPT_RT=y; Ubuntu:
             linux-realtime; Debian: linux-image-rt-*). ...
-  WARN  Virtual machine                          Docker Desktop (linuxkit)
-  WARN  Isolated CPUs                            none
-  INFO  Interrupts on isolated CPUs              not applicable (no isolated CPUs)
-  INFO  CPU frequency scaling                    no cpufreq (fixed frequency, or managed by firmware/hypervisor)
-  INFO  Deep CPU idle states                     no cpuidle states exposed
-  PASS  Simultaneous multithreading              not supported
-  INFO  Real-time throttling                     950000 us per 1000000 us
-  WARN  Transparent huge pages                   always
-  WARN  Swap                                     on: /var/lib/swap
-  PASS  Clock source                             arch_sys_counter
-  PASS  Permission to use real-time priorities   root
-  PASS  Permission to lock memory                root
+  WARN critical Virtual machine                          Docker Desktop (linuxkit)
+  WARN medium   Isolated CPUs                            none
+  INFO          Interrupts on isolated CPUs              not applicable (no isolated CPUs)
+  INFO          CPU frequency scaling                    no cpufreq (fixed frequency, or managed by firmware/hypervisor)
+  INFO          Deep CPU idle states                     no cpuidle states exposed
+  PASS          Simultaneous multithreading              not supported
+  INFO          Real-time throttling                     950000 us per 1000000 us
+  WARN low      Transparent huge pages                   always
+  INFO          Swap                                     on: /var/lib/swap (0 MiB used of 1023 MiB)
+  PASS          Clock source                             arch_sys_counter
+  PASS          Permission to use real-time priorities   root
+  PASS          Permission to lock memory                root
 
-  0 fail, 5 warn, 4 pass, 4 info
+  0 fail, 4 warn, 4 pass, 5 info
 ```
+
+The summary puts the finding with the largest effect first. Each finding has
+an impact:
+
+| Impact | Meaning | Examples |
+|---|---|---|
+| critical | Cannot be fixed by tuning this system | Running in a virtual machine |
+| high | Milliseconds or more, or real-time priorities unusable | Kernel without PREEMPT_RT, no permission for SCHED_FIFO |
+| medium | Tens of microseconds to a few milliseconds | No isolated CPUs, interrupts on isolated CPUs, deep idle states, frequency scaling, swap in use |
+| low | Only under particular conditions | Transparent huge pages, SMT, swap configured but unused |
+
+Where it matters, a check looks at actual use, not only the configuration:
+swap that is configured but unused is reported as INFO, swap in use as WARN.
 
 ## Who it is for
 
@@ -69,7 +89,7 @@ Some values are only visible with root (e.g. the preemption mode of
 ```bash
 rtdoctor check                  # report for people
 rtdoctor check --verbose        # also explain PASS / INFO items
-rtdoctor check --json           # report for tools
+rtdoctor check --json           # report for tools (with "impact" and an ordered "priorities" list)
 rtdoctor check --fail-on warn   # exit code 1 on any warning, for CI
 ```
 

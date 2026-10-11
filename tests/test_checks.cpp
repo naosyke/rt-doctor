@@ -1,7 +1,10 @@
 #include <gtest/gtest.h>
 
 #include "fake_system.hpp"
+#include <sstream>
+
 #include "rtdoctor/checks.hpp"
+#include "rtdoctor/output.hpp"
 
 using namespace rtdoctor;
 
@@ -88,7 +91,8 @@ TEST(Checks, DesktopMachineGetsTheUsualFindings) {
     EXPECT_EQ(check_cpu_idle(system).status, Status::Warn);
     EXPECT_EQ(check_smt(system).status, Status::Info);
     EXPECT_EQ(check_transparent_hugepages(system).status, Status::Warn);
-    EXPECT_EQ(check_swap(system).value, "on: /swap.img");
+    EXPECT_EQ(check_swap(system).status, Status::Info);  // Configured but unused.
+    EXPECT_EQ(check_swap(system).value, "on: /swap.img (0 MiB used of 2047 MiB)");
 }
 
 TEST(Checks, FullPreemptionIsAWarningNotAFailure) {
@@ -163,4 +167,71 @@ TEST(Checks, SlowClocksource) {
     FakeSystem fake;
     fake.file("sys/devices/system/clocksource/clocksource0/current_clocksource", "hpet\n");
     EXPECT_EQ(check_clocksource(SystemView(fake.root())).status, Status::Warn);
+}
+
+TEST(Checks, SwapInUseIsAWarning) {
+    FakeSystem fake;
+    fake.file("proc/swaps", "Filename\tType\tSize\tUsed\tPriority\n/dev/sda2 partition 4194300 524288 -2\n");
+    const auto result = check_swap(SystemView(fake.root()));
+    EXPECT_EQ(result.status, Status::Warn);
+    EXPECT_EQ(result.impact, Impact::Medium);
+    EXPECT_EQ(result.value, "on: /dev/sda2 (512 MiB used of 4095 MiB)");
+}
+
+namespace {
+
+std::string text_report(const std::vector<CheckResult>& results) {
+    std::ostringstream out;
+    print_text(out, results, false, false);
+    return out.str();
+}
+
+ProcessLimits root_limits() {
+    ProcessLimits limits;
+    limits.root = true;
+    return limits;
+}
+
+}  // namespace
+
+TEST(Priorities, VirtualMachineComesFirstWithItsCaveat) {
+    FakeSystem fake;
+    desktop_machine(fake);
+    fake.file("proc/version", "Linux version 6.10.14-linuxkit #1 SMP PREEMPT_DYNAMIC\n")
+        .file("sys/kernel/debug/sched/preempt", "none voluntary (full)\n");
+    const auto results = run_checks(SystemView(fake.root()), root_limits());
+
+    // The VM comes first: no tuning inside it can make up for hypervisor pauses.
+    const auto findings = prioritized(results);
+    ASSERT_GE(findings.size(), 3u);
+    EXPECT_EQ(findings[0].id, "virtualization");
+    EXPECT_EQ(findings[0].impact, Impact::Critical);
+    EXPECT_EQ(findings[1].id, "kernel_preemption");
+
+    const auto report = text_report(results);
+    EXPECT_NE(report.find("cannot bring deadline misses to zero"), std::string::npos);
+}
+
+TEST(Priorities, NoVirtualMachineCaveatOnBareMetal) {
+    FakeSystem fake;
+    desktop_machine(fake);
+    const auto results = run_checks(SystemView(fake.root()), root_limits());
+
+    const auto findings = prioritized(results);
+    ASSERT_FALSE(findings.empty());
+    EXPECT_EQ(findings[0].id, "kernel_preemption");  // FAIL, high impact.
+    EXPECT_EQ(findings[0].impact, Impact::High);
+    // Medium findings before low ones.
+    EXPECT_EQ(findings.back().id, "transparent_hugepages");
+
+    const auto report = text_report(results);
+    EXPECT_NE(report.find("Biggest factor: Kernel preemption model - preemption: voluntary"), std::string::npos);
+    EXPECT_EQ(report.find("virtual machine, the hypervisor"), std::string::npos);
+}
+
+TEST(Priorities, TunedMachineHasNoMajorIssues) {
+    FakeSystem fake;
+    tuned_machine(fake);
+    const auto report = text_report(run_checks(SystemView(fake.root()), root_limits()));
+    EXPECT_NE(report.find("No major issues found."), std::string::npos);
 }
