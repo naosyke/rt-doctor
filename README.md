@@ -228,8 +228,8 @@ CI は push のたびに x86-64 と arm64 でビルドとテストをします�
 公開するときは、`CMakeLists.txt` のバージョンを上げてから、同じ番号のタグを push します。
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 リリース用のワークフローが `scripts/package.sh` で両方のバイナリを作り（タグとバージョンが違えば止まります）、
