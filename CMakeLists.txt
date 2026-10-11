@@ -23,8 +23,12 @@ add_library(rtdoctor_core
   src/i18n.cpp
   src/session.cpp
   src/wizard.cpp
+  src/latency.cpp
+  src/latency_report.cpp
 )
 target_include_directories(rtdoctor_core PUBLIC include)
+find_package(Threads REQUIRED)
+target_link_libraries(rtdoctor_core PUBLIC Threads::Threads)
 target_compile_options(rtdoctor_core PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(rtdoctor src/main.cpp)
@@ -37,7 +41,7 @@ endif()
 
 enable_testing()
 find_package(GTest REQUIRED)
-add_executable(rtdoctor_tests tests/test_checks.cpp tests/test_system_view.cpp tests/test_trace.cpp tests/test_html_report.cpp tests/test_wizard.cpp)
+add_executable(rtdoctor_tests tests/test_checks.cpp tests/test_system_view.cpp tests/test_trace.cpp tests/test_html_report.cpp tests/test_wizard.cpp tests/test_latency.cpp)
 target_link_libraries(rtdoctor_tests PRIVATE rtdoctor_core GTest::gtest_main)
 include(GoogleTest)
 gtest_discover_tests(rtdoctor_tests)
@@ -72,8 +76,16 @@ set_tests_properties(report_writes_checks_and_trace PROPERTIES SKIP_RETURN_CODE 
 add_test(NAME wizard_guides_through_trace_and_report
   COMMAND sh -c "test -w /sys/kernel/tracing/instances 2>/dev/null || mount -t tracefs nodev /sys/kernel/tracing 2>/dev/null || exit 77; \
     rm -f rtdoctor-report-*.html; \
-    $<TARGET_FILE:cpu_hog> 1 6 & \
-    $<TARGET_FILE:periodic_task> 1 10 2 6 & \
-    sleep 0.5; printf 'periodic\\n4\\n3\\n' | $<TARGET_FILE:rtdoctor> wizard --lang en > wizard.txt; status=$?; wait; \
+    $<TARGET_FILE:cpu_hog> 1 9 & \
+    $<TARGET_FILE:periodic_task> 1 10 2 9 & \
+    sleep 0.5; printf '1\\nperiodic\\n4\\n3\\n' | $<TARGET_FILE:rtdoctor> wizard --lang en > wizard.txt; status=$?; wait; \
     cat wizard.txt; test $status -eq 0 && grep -q 'Delayed most by: task hog' wizard.txt && ls rtdoctor-report-*.html")
 set_tests_properties(wizard_guides_through_trace_and_report PROPERTIES SKIP_RETURN_CODE 77)
+
+# The latency measurement on two CPUs, with the trace of what delayed it.
+add_test(NAME latency_measures_and_traces
+  COMMAND sh -c "test -w /sys/kernel/tracing/instances 2>/dev/null || mount -t tracefs nodev /sys/kernel/tracing 2>/dev/null || exit 77; \
+    $<TARGET_FILE:rtdoctor> latency --duration 2 --cpus 0-1 --trace > latency.txt; status=$?; cat latency.txt; \
+    test $status -eq 0 && grep -q 'SCHED_FIFO 95 on CPUs 0-1' latency.txt && grep -Eq '^ +1 +[0-9]{3,}' latency.txt && \
+    grep -q 'What ran on the CPU' latency.txt")
+set_tests_properties(latency_measures_and_traces PROPERTIES SKIP_RETURN_CODE 77)

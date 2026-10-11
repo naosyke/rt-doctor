@@ -106,7 +106,7 @@ bool run_trace(const TraceRequest& request, bool quiet, TraceResult& result) {
 
 bool write_report(const std::string& path, const SystemView& system, const std::vector<CheckResult>& results,
                   const std::optional<TraceResult>& trace, std::size_t max_threads, Lang lang,
-                  const std::string& version) {
+                  const std::string& version, const std::optional<LatencyData>& latency) {
     auto host = read_host_info(system);
     utsname name{};
     if (uname(&name) == 0) host.machine = name.machine;
@@ -118,7 +118,7 @@ bool write_report(const std::string& path, const SystemView& system, const std::
 
     std::ofstream file(path);
     if (file) {
-        print_html(file, host, results, trace, max_threads, lang);
+        print_html(file, host, results, trace, max_threads, lang, latency);
         file.close();
     }
     if (!file) {

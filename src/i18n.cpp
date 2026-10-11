@@ -177,6 +177,20 @@ const std::map<std::string, std::string>& japanese() {
          "/etc/security/limits.conf で上限を上げる（例: '@realtime - memlock unlimited'）か、プログラムに "
          "CAP_IPC_LOCK を与えてください。"},
 
+        // Latency.
+        {"excellent: typical of a tuned PREEMPT_RT system, fine for loops down to about 100 us",
+         "とても良い: 調整済みの PREEMPT_RT システムの水準。100 us 程度の周期まで使えます"},
+        {"good: fine for 1 ms control loops", "良い: 1 ms 周期の制御ループに使えます"},
+        {"fair: fine for 10 ms loops, but 1 ms loops can miss their deadline",
+         "まずまず: 10 ms 周期なら使えますが、1 ms 周期では期限切れが起きえます"},
+        {"poor: wake-ups can be milliseconds late, so even 10 ms loops can miss; see rtdoctor check",
+         "悪い: 数ミリ秒遅れて起きることがあり、10 ms 周期でも期限切れが起きえます。システムの診断を確認してください"},
+        {"rtdoctor itself (reading the trace)", "rtdoctor 自身（トレースの読み取り）"},
+        {"This is the cost of --trace: rtdoctor reads the trace on the measured CPUs. Compare with a run "
+         "without --trace for the undisturbed numbers.",
+         "--trace による測定の負担です（rtdoctor が測定中の CPU でトレースを読んでいます）。邪魔のない値は、"
+         "--trace なしの測定と比べてください。"},
+
         // Trace advice.
         {"The CPU was idle but the task still did not run: slow wake-ups from deep idle states, or a "
          "virtual machine being paused. See rtdoctor check (Deep CPU idle states, Virtual machine).",

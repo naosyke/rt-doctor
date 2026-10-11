@@ -12,6 +12,10 @@ std::string advice_for(const std::string& who) {
         return "The CPU was idle but the task still did not run: slow wake-ups from deep idle states, or a "
                "virtual machine being paused. See rtdoctor check (Deep CPU idle states, Virtual machine).";
     }
+    if (who.rfind("rtdoctor itself", 0) == 0) {
+        return "This is the cost of --trace: rtdoctor reads the trace on the measured CPUs. Compare with a run "
+               "without --trace for the undisturbed numbers.";
+    }
     if (who.rfind("irq ", 0) == 0) {
         return "An interrupt handler ran on the task's CPU. Route that interrupt to another CPU "
                "(/proc/irq/<n>/smp_affinity_list), or isolate the task's CPU.";

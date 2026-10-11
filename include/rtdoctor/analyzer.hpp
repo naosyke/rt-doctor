@@ -101,7 +101,6 @@ private:
     AnalyzerOptions options_;
     std::map<int, Thread> threads_;
     std::map<int, Cpu> cpus_;
-    std::map<int, bool> target_cache_;
 };
 
 // "1.23 ms"

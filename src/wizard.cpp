@@ -13,6 +13,8 @@
 #include <thread>
 
 #include "rtdoctor/checks.hpp"
+#include "rtdoctor/latency.hpp"
+#include "rtdoctor/latency_report.hpp"
 #include "rtdoctor/session.hpp"
 #include "rtdoctor/trace_report.hpp"
 
@@ -169,7 +171,7 @@ int run_wizard(std::istream& in, std::ostream& out, Lang lang, const std::string
     }
 
     // 1. The system.
-    out << "\n" << w("[1/3] Checking this system...", "[1/3] このシステムを診断しています…") << "\n";
+    out << "\n" << w("[1/4] Checking this system...", "[1/4] このシステムを診断しています…") << "\n";
     const auto results = run_checks(system, current_process_limits());
     const auto findings = prioritized(results);
     if (findings.empty() || findings.front().impact == Impact::Low) {
@@ -188,12 +190,37 @@ int run_wizard(std::istream& in, std::ostream& out, Lang lang, const std::string
                  "  理由と直し方は、最後に作るレポートに書いてあります。\n");
     }
 
-    // 2. The program.
+    // 2. How late this machine wakes up a real-time thread.
+    std::optional<LatencyData> latency;
+    out << "\n" << w("[2/4] Wake-up latency per CPU (how late a real-time thread wakes up).",
+                     "[2/4] CPU ごとの起床遅延を測ります（リアルタイムのスレッドが、約束の時刻からどれだけ遅れて起きるか）。")
+        << "\n";
+    const auto seconds_answer = ask(in, out, w("  Measure for how many seconds? [10] (0 = skip): ",
+                                               "  何秒間測りますか？ [10]（0 で飛ばす）: "));
+    const double latency_seconds = seconds_answer.empty() ? 10 : std::atof(seconds_answer.c_str());
+    if (latency_seconds > 0) {
+        out << w("  Measuring; any load you normally run makes the result more realistic...\n",
+                 "  測っています。いつもの負荷をかけておくと、より実際に近い結果になります…\n");
+        LatencyOptions options;
+        options.duration = latency_seconds;
+        latency = LatencyData{measure_latency(options), std::nullopt};
+        if (const auto* worst = worst_cpu(latency->result)) {
+            char line[96];
+            std::snprintf(line, sizeof(line), "%.0f us", worst->stats.max());
+            out << w("  Worst: ", "  最悪: ") << line << " (CPU " << worst->cpu << ") - "
+                << translate(lang, latency_verdict(worst->stats.max())) << "\n";
+        }
+        if (!latency->result.realtime) {
+            out << w("  (Without root: measured with normal priority.)\n", "  （root でないため、普通の優先度で測りました）\n");
+        }
+    }
+
+    // 3. The program.
     std::optional<TraceResult> traced;
     std::size_t max_threads = 3;
     if (root) {
-        out << "\n" << w("[2/3] Which program is late? Watching running programs for 1 second...",
-                         "[2/3] 遅れを調べたいプログラムを選びます。動いているプログラムを1秒間観察しています…")
+        out << "\n" << w("[3/4] Which program is late? Watching running programs for 1 second...",
+                         "[3/4] 遅れを調べたいプログラムを選びます。動いているプログラムを1秒間観察しています…")
             << "\n";
         const auto before = sample_processes(system);
         const auto start = std::chrono::steady_clock::now();
@@ -300,13 +327,13 @@ int run_wizard(std::istream& in, std::ostream& out, Lang lang, const std::string
         }
     }
 
-    // 3. The report.
+    // 4. The report.
     char stamp[32];
     const std::time_t now = std::time(nullptr);
     std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", std::localtime(&now));
     const std::string file = std::string("rtdoctor-report-") + stamp + ".html";
-    out << "\n" << w("[3/3] Writing the report...", "[3/3] レポートを作っています…") << "\n";
-    if (!write_report(file, system, results, traced, max_threads, lang, version)) return 2;
+    out << "\n" << w("[4/4] Writing the report...", "[4/4] レポートを作っています…") << "\n";
+    if (!write_report(file, system, results, traced, max_threads, lang, version, latency)) return 2;
     char cwd[4096];
     const std::string where = getcwd(cwd, sizeof(cwd)) ? std::string(cwd) + "/" + file : file;
     out << "  " << where << "\n"

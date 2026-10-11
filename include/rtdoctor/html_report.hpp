@@ -11,6 +11,8 @@
 #include "rtdoctor/analyzer.hpp"
 #include "rtdoctor/checks.hpp"
 #include "rtdoctor/i18n.hpp"
+#include "rtdoctor/latency.hpp"
+#include "rtdoctor/latency_report.hpp"
 #include "rtdoctor/system_view.hpp"
 #include "rtdoctor/trace_report.hpp"
 
@@ -37,8 +39,14 @@ struct TraceResult {
     std::string error;  // Set if tracing could not run; the report says so.
 };
 
+struct LatencyData {
+    LatencyResult result;
+    std::optional<LatencyCauses> causes;  // With --trace.
+};
+
 void print_html(std::ostream& out, const HostInfo& host, const std::vector<CheckResult>& results,
-                const std::optional<TraceResult>& trace, std::size_t max_threads = 3, Lang lang = Lang::En);
+                const std::optional<TraceResult>& trace, std::size_t max_threads = 3, Lang lang = Lang::En,
+                const std::optional<LatencyData>& latency = std::nullopt);
 
 std::string html_escape(const std::string& text);
 

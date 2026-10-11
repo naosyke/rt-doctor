@@ -192,3 +192,19 @@ TEST(Analyzer, MigrationMovesTheWait) {
     EXPECT_EQ(r.delays[1].who, "task hog (pid 77)");    // 1 ms on CPU 1 before the move
     EXPECT_EQ(r.worst[0].cpu, 3);
 }
+
+TEST(Analyzer, ThreadRenamedAfterStartIsStillFound) {
+    // The thread first runs under its parent's name, then names itself.
+    LatencyAnalyzer analyzer([](int, const std::string& comm) { return comm == "control"; });
+    Script script;
+    script.switch_(0.9, 1, "swapper/1", 0, "R", "app", 50)
+        .switch_(0.95, 1, "app", 50, "S", "swapper/1", 0)
+        .waking(1.0, 0, 50, "control", 1)
+        .switch_(1.0002, 1, "swapper/1", 0, "R", "control", 50)
+        .switch_(1.001, 1, "control", 50, "S", "swapper/1", 0);
+    for (const auto& line : script.lines) analyzer.feed(*parse_trace_line(line));
+    const auto reports = analyzer.reports();
+    ASSERT_EQ(reports.size(), 1u);
+    EXPECT_EQ(reports[0].comm, "control");
+    EXPECT_EQ(reports[0].activations, 1);
+}

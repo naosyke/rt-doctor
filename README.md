@@ -4,11 +4,12 @@
 
 ロボット（ROS 2）、モーター制御、ドローン、産業機器、オーディオなど、時間に厳しい処理を Linux で動かしていると、
 「普段は間に合うのに、ときどき遅れる。原因がわからない」という問題がよく起きます。
-rt-doctor は、その原因を2つの方向から調べます。
+rt-doctor は、その原因を3つの方向から調べます。
 
 | | 調べること | たとえ |
 |---|---|---|
 | **システムの診断**（`check`） | カーネル、CPU の隔離、割り込み、省電力、メモリ、権限、仮想マシンなど、遅れの原因になる**設定** | 健康診断 |
+| **起床遅延の測定**（`latency`） | リアルタイムのスレッドが、約束の時刻から**実際に何 us 遅れて起きるか**を CPU ごとに測る（cyclictest と同じ方式） | 体力測定 |
 | **遅れの原因調査**（`trace`） | 指定したプログラムが待たされていた間に、その CPU で**実際に何が動いていたか**（他のプログラム、割り込みなど） | 心電図 |
 
 結果は、**なぜ問題なのか**と**どう直すか**と一緒に示します。HTML のレポート（日本語対応）にまとめて、人に渡すこともできます。
@@ -25,11 +26,15 @@ sudo rtdoctor
 `sudo rtdoctor` とだけ打つと、質問に答えていくだけで最後まで進む**対話モード**になります。
 
 ```text
-[1/3] このシステムを診断しています…
+[1/4] このシステムを診断しています…
   一番の要因: カーネルのプリエンプション方式 - プリエンプション: なし、または voluntary
   次に:       隔離CPU - なし
 
-[2/3] 遅れを調べたいプログラムを選びます。動いているプログラムを1秒間観察しています…
+[2/4] CPU ごとの起床遅延を測ります（リアルタイムのスレッドが、約束の時刻からどれだけ遅れて起きるか）。
+  何秒間測りますか？ [10]（0 で飛ばす）:
+  最悪: 412 us (CPU 2) - まずまず: 10 ms 周期なら使えますが、1 ms 周期では期限切れが起きえます
+
+[3/4] 遅れを調べたいプログラムを選びます。動いているプログラムを1秒間観察しています…
    1) ros2_node        pid 1826    リアルタイム FIFO 80、1秒に 1000 回起きる（約 1.0 ms ごと）、スレッド control_loop
    2) planner          pid 1902    1秒に 100 回起きる（約 10.0 ms ごと）
   番号・pid・名前のどれかを入力（Enter で飛ばす）: 1
@@ -40,7 +45,7 @@ sudo rtdoctor
   一番の原因: タスク ros2_logger (pid 2210)、38.20 ms
   対策: … そのタスクを別の CPU に移す（taskset、cgroup の cpuset）か、遅れたタスクにリアルタイム優先度を付けて（chrt -f）…
 
-[3/3] レポートを作っています…
+[4/4] レポートを作っています…
   /home/robot/rtdoctor-report-20261012-101500.html
 ```
 
@@ -52,11 +57,14 @@ sudo rtdoctor
 |---|---|
 | 質問に答えながら全部やる | `sudo rtdoctor` |
 | システムの診断 | `sudo rtdoctor check` |
+| CPU ごとの起床遅延の測定 | `sudo rtdoctor latency --duration 60` |
+| 遅延の原因も一緒に調べる | `sudo rtdoctor latency --duration 60 --trace` |
 | プログラムを遅らせた原因の調査 | `sudo rtdoctor trace --pid PID --deadline-ms 期限` |
 | 名前で指定して調査 | `sudo rtdoctor trace --comm スレッド名 ...` |
-| HTML レポート（日本語） | `sudo rtdoctor report --lang ja -o report.html [--pid PID ...]` |
+| HTML レポート（日本語） | `sudo rtdoctor report --lang ja -o report.html [--latency 秒] [--pid PID ...]` |
 | ほかのツールで処理する | `check` / `trace` に `--json` |
 | 自動テスト（CI）で設定の劣化を検知 | `rtdoctor check --fail-on warn` |
+| 自動テストで遅延の悪化を検知 | `sudo rtdoctor latency --duration 60 --fail-over-us 200` |
 
 終了コード: 0 = 問題なし（`--fail-on warn` なら警告もなし）、1 = 基準以上の問題あり、2 = 使い方の誤り、
 3 = トレースが使えない（`trace` のみ。`report` ではレポートの中に書きます）。
@@ -92,6 +100,52 @@ sudo rtdoctor
 | FAIL | このままではリアルタイム処理がまともに動かない |
 
 結果の先頭には、**影響が一番大きい問題**を出します（「まずこれを直す」）。root でないと見えない値もあるので、`sudo` で実行してください。
+
+## 起床遅延の測定
+
+```bash
+sudo rtdoctor latency --duration 60
+```
+
+各 CPU に1本ずつ、リアルタイム優先度（SCHED_FIFO 95）のスレッドを置き、「1 ms 後に起こして」とタイマーをセットしては、
+実際に起きた時刻とのずれを記録します。cyclictest と同じ方式で、同じ条件で比べると同じ範囲の値になることを確かめています。
+
+```text
+rt-doctor latency - 15.0 s, timer every 1000 us, SCHED_FIFO 95 on CPUs 0-3
+
+   CPU   wake-ups       min       avg       99%     99.9%        max
+     0      14952     11 us    117 us    277 us   1500 us    6157 us
+     1      14952    7.4 us    130 us    283 us   1260 us    5779 us
+     2      14955    8.7 us    113 us    283 us   1590 us    5761 us
+     3      14951     12 us    146 us    310 us   1560 us    6073 us
+
+  Worst: 6157 us on CPU 0 -> poor: wake-ups can be milliseconds late, so even 10 ms loops can miss; see rtdoctor check
+```
+
+（Mac の Docker Desktop、つまり仮想マシンの上で測った実際の値です。同じ条件の cyclictest は、最小 6〜10 us、最大 6.1〜7.0 ms
+でした。実機で調整済みのマシンなら、最大値は数十 us 程度になるのが一般的です。）
+
+**最大値（max）**が、そのマシンで起こりうる最悪の遅れの目安です。
+
+| 最大値 | 目安 |
+|---|---|
+| 50 us 以下 | とても良い（調整済みの PREEMPT_RT の水準）。100 us 程度の周期まで使える |
+| 150 us 以下 | 良い。1 ms 周期の制御ループに使える |
+| 1 ms 以下 | まずまず。10 ms 周期なら使えるが、1 ms 周期では期限切れが起きうる |
+| 1 ms 超 | 悪い。10 ms 周期でも期限切れが起きうる |
+
+`--trace` を付けると、測定スレッドが起こされてから実際に動くまでの間に、**その CPU で何が動いていたか**も表示します
+（cyclictest にはない機能です）。
+
+| オプション | 意味（初期値） |
+|---|---|
+| `--duration 秒` | 測る時間（10）。まれな遅れを捕まえるには、いつもの負荷をかけて数分以上 |
+| `--interval-us us` | タイマーの間隔（1000） |
+| `--priority 1-99` | 測定スレッドのリアルタイム優先度（95） |
+| `--cpus 0-3` | 測る CPU（すべて） |
+| `--trace` | 遅れの原因も調べる |
+| `--fail-over-us us` | 最大値がこれを超えたら終了コード 1（CI 用） |
+| `--json` | ほかのツールで処理する形式 |
 
 ## 遅れの原因調査の例
 
@@ -136,6 +190,7 @@ sudo rtdoctor report --lang ja -o report.html --pid 1826 --duration 10 --deadlin
 印刷可）。チケットに添付したり、お客さんや同僚に送ったりできます。
 
 * マシンの情報と、**一番の要因**
+* CPU ごとの起床遅延（`--latency 秒` を付けたとき）
 * 調査したプログラムの応答時間の分布（期限の線つき）、**誰が遅らせたか**と対策、時間がかかった回ワーストの内訳
 * すべての診断項目（問題のあるものから、影響の大きい順）
 
@@ -164,7 +219,7 @@ docker run --rm -v "$PWD":/workspace rtdoctor-base bash -c \
 
 `build/rtdoctor`（約 2 MB の静的バイナリ）ができます。診断項目は、典型的なマシン（調整済みのリアルタイム機、普通の
 デスクトップ、Docker Desktop、隔離CPUに割り込みがあるマシン）を模した偽の `/proc`・`/sys` でテストしています。
-トレースと対話モードの実地テスト（周期プログラムと邪魔役を同じ CPU で動かし、邪魔役を名指しできるか）は、ftrace が
+トレース、遅延測定、対話モードの実地テスト（周期プログラムと邪魔役を同じ CPU で動かし、邪魔役を名指しできるか）は、ftrace が
 使える環境（root。コンテナなら `--privileged`）で動き、それ以外では飛ばします。
 
 ### リリース
@@ -187,7 +242,7 @@ git push origin v0.2.0
 * [x] `rtdoctor report` - すべてを1つの HTML にまとめて共有（日本語対応）
 * [x] x86-64 / arm64 の配布用バイナリ（タグで GitHub Actions が作成）
 * [x] 対話モード（`sudo rtdoctor`）
-* [ ] `rtdoctor latency` - CPU ごとの起床遅延の測定を内蔵（cyclictest 不要）
+* [x] `rtdoctor latency` - CPU ごとの起床遅延の測定を内蔵（cyclictest 不要、`--trace` で原因も表示）
 
 ## ライセンス
 

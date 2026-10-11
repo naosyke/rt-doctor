@@ -32,16 +32,14 @@ LatencyAnalyzer::LatencyAnalyzer(Filter is_target, AnalyzerOptions options)
 
 bool LatencyAnalyzer::target(int tid, const std::string& comm) {
     if (tid <= 0) return false;
-    const auto cached = target_cache_.find(tid);
-    if (cached != target_cache_.end()) return cached->second;
-    const bool result = is_target_(tid, comm);
-    target_cache_[tid] = result;
-    if (result) {
-        auto& thread = threads_[tid];
-        thread.tid = tid;
-        thread.comm = comm;
-    }
-    return result;
+    if (threads_.count(tid)) return true;
+    // Only matches are remembered: a thread often gets its name after it
+    // started (pthread_setname_np), so a "no" can turn into a "yes" later.
+    if (!is_target_(tid, comm)) return false;
+    auto& thread = threads_[tid];
+    thread.tid = tid;
+    thread.comm = comm;
+    return true;
 }
 
 void LatencyAnalyzer::account(int cpu, double time) {

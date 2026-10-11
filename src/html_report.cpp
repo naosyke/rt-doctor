@@ -84,6 +84,14 @@ svg.hist text { fill: var(--muted); font-size: 11px; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); margin: 8px 0; }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
 .note { color: var(--warn); }
+.lat { margin: 12px 0 4px; font-variant-numeric: tabular-nums; }
+.lat-row { display: grid; grid-template-columns: 36px repeat(5, minmax(52px, 72px)) minmax(60px, 1fr); gap: 8px;
+  align-items: center; padding: 4px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.lat-head { color: var(--muted); font-size: 12px; border-top: 0; }
+.lat-row .track { height: 10px; margin-top: 0; }
+.p99 { position: absolute; top: -3px; bottom: -3px; border-left: 2px solid var(--text); opacity: .6; }
+@media (max-width: 560px) { .lat-row { grid-template-columns: 28px repeat(3, 1fr); } .lat-row > :nth-child(2),
+  .lat-row > :nth-child(3), .lat-row > :nth-child(5) { display: none; } .lat-row .track { grid-column: 1 / -1; } }
 footer { color: var(--muted); font-size: 12px; margin-top: 40px; }
 @media print { body { background: #fff; } .card { break-inside: avoid; } details { display: block; } }
 )CSS";
@@ -379,6 +387,76 @@ void print_thread(std::ostream& out, const ThreadReport& t, double deadline, con
     out << "</div>\n";
 }
 
+std::string us(double value) { return fmt(value < 10 ? "%.1f us" : "%.0f us", value); }
+
+void print_latency(std::ostream& out, const LatencyData& latency, const Words& w) {
+    const auto& r = latency.result;
+    out << "<h2>" << w("Wake-up latency per CPU", "CPU ごとの起床遅延") << "</h2><p class=\"sub\">"
+        << w("A thread on each CPU asked to wake up every " + std::to_string(r.options.interval_us) +
+                 " us and recorded how late it actually woke up, for " + fmt("%.1f", r.duration) + " s" +
+                 (r.realtime ? " with real-time priority " + std::to_string(r.options.priority) : "") + ".",
+             "各 CPU で、" + std::to_string(r.options.interval_us) + " us ごとに起こしてもらう約束をしたスレッドが、実際に何 us "
+                 "遅れて起きたかを " + fmt("%.1f", r.duration) + " 秒間記録しました" +
+                 (r.realtime ? "（リアルタイム優先度 " + std::to_string(r.options.priority) + "）" : "") + "。")
+        << "</p>";
+    if (!r.realtime) {
+        out << "<p class=\"note\">" << w("Real-time priority was not allowed (not root): these are latencies of a normal task.",
+                                         "リアルタイム優先度が使えなかったため（root でない）、普通の優先度での値です。")
+            << "</p>";
+    }
+    const auto* worst = worst_cpu(r);
+    if (!worst) return;
+    out << "<div class=\"card\"><div class=\"tiles\">";
+    const auto tile = [&](const std::string& label, const std::string& value, const char* cls = "") {
+        out << "<div class=\"tile " << cls << "\"><span>" << label << "</span><b>" << html_escape(value) << "</b></div>";
+    };
+    const double max = worst->stats.max();
+    tile(w("Worst wake-up", "最悪の遅れ"), us(max), max > 1000 ? "bad" : max <= 150 ? "good" : "");
+    tile(w("On CPU", "その CPU"), std::to_string(worst->cpu));
+    std::int64_t samples = 0;
+    for (const auto& c : r.cpus) samples += c.stats.samples();
+    tile(w("Wake-ups measured", "測定回数"), std::to_string(samples));
+    out << "</div><p class=\"advice\"><b>" << w("Reading:", "目安:") << "</b> " << html_escape(w.tr(latency_verdict(max)))
+        << "</p>";
+
+    // One row per CPU; the bar is the maximum, the tick the 99th percentile.
+    out << "<div class=\"lat\"><div class=\"lat-row lat-head\"><span>CPU</span><span>min</span><span>"
+        << w("avg", "平均") << "</span><span>99%</span><span>99.9%</span><span>max</span><span></span></div>";
+    for (const auto& c : r.cpus) {
+        const auto& st = c.stats;
+        const auto pct = [&](double v) { return fmt("%.1f", max > 0 ? std::min(100.0, v / max * 100) : 0); };
+        out << "<div class=\"lat-row\"><span>" << c.cpu << "</span><span>" << us(st.min()) << "</span><span>"
+            << us(st.average()) << "</span><span>" << us(st.percentile(0.99)) << "</span><span>"
+            << us(st.percentile(0.999)) << "</span><span><b>" << us(st.max()) << "</b></span><span class=\"track\">"
+            << "<span class=\"seg\"><i style=\"width:" << pct(st.max()) << "%;background:"
+            << (st.max() > 1000 ? "var(--fail)" : st.max() > 150 ? "var(--warn)" : "var(--pass)")
+            << "\"></i></span><span class=\"p99\" style=\"left:" << pct(st.percentile(0.99)) << "%\"></span></span></div>";
+    }
+    out << "</div><p class=\"sub\">" << w("Bar: maximum (relative to the worst CPU). Tick: 99th percentile.",
+                                           "棒: 最大値（一番悪い CPU を基準にした長さ）。縦線: 99パーセンタイル。")
+        << "</p>";
+
+    if (latency.causes && !latency.causes->delays.empty()) {
+        const auto& causes = *latency.causes;
+        out << "<h3>" << w("What ran instead when a measuring thread was woken",
+                           "測定スレッドが起こされてから動くまでの間に、その CPU で動いていたもの")
+            << "</h3>";
+        const double largest = causes.delays.front().seconds;
+        for (std::size_t d = 0; d < causes.delays.size() && d < 6; ++d) {
+            const auto& delay = causes.delays[d];
+            const auto count = std::to_string(delay.count);
+            out << "<div class=\"who\"><span class=\"name\">" << html_escape(w.tr(delay.who))
+                << "</span><span class=\"ms\">" << html_escape(ms(delay.seconds)) << "</span><span class=\"bar\"><i style=\"width:"
+                << fmt("%.1f", largest > 0 ? std::max(0.5, delay.seconds / largest * 100) : 0) << "%;background:"
+                << color_of(delay.who) << "\"></i></span><span class=\"count\">"
+                << w("in " + count + " waits", count + " 回の待ちで発生") << "</span></div>";
+        }
+        out << "<p class=\"advice\"><b>" << w("What to do:", "対策:") << "</b> "
+            << html_escape(w.tr(advice_for(causes.delays.front().who))) << "</p>";
+    }
+    out << "</div>\n";
+}
+
 void print_trace(std::ostream& out, const TraceResult& trace, std::size_t max_threads, const Words& w) {
     const auto& s = trace.summary;
     out << "<h2>" << w("Trace: ", "タスクの調査: ") << html_escape(w.tr(s.target)) << "</h2>";
@@ -473,7 +551,8 @@ HostInfo read_host_info(const SystemView& system) {
 }
 
 void print_html(std::ostream& out, const HostInfo& host, const std::vector<CheckResult>& results,
-                const std::optional<TraceResult>& trace, std::size_t max_threads, Lang lang) {
+                const std::optional<TraceResult>& trace, std::size_t max_threads, Lang lang,
+                const std::optional<LatencyData>& latency) {
     const Words w{lang};
     const std::string name = html_escape(host.hostname.empty() ? w("this system", "このシステム") : host.hostname);
     out << "<!DOCTYPE html>\n<html lang=\"" << w("en", "ja") << "\"><head><meta charset=\"utf-8\">"
@@ -487,6 +566,7 @@ void print_html(std::ostream& out, const HostInfo& host, const std::vector<Check
         << "</p>\n";
     print_host(out, host, w);
     print_verdict(out, results, w);
+    if (latency) print_latency(out, *latency, w);
     if (trace) print_trace(out, *trace, max_threads, w);
     print_checks(out, results, w);
     out << "<footer>"

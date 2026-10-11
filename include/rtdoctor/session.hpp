@@ -42,6 +42,6 @@ bool run_trace(const TraceRequest& request, bool quiet, TraceResult& result);
 // cannot be written.
 bool write_report(const std::string& path, const SystemView& system, const std::vector<CheckResult>& results,
                   const std::optional<TraceResult>& trace, std::size_t max_threads, Lang lang,
-                  const std::string& version);
+                  const std::string& version, const std::optional<LatencyData>& latency = std::nullopt);
 
 }  // namespace rtdoctor
