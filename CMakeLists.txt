@@ -15,6 +15,10 @@ add_library(rtdoctor_core
   src/system_view.cpp
   src/checks.cpp
   src/output.cpp
+  src/trace_event.cpp
+  src/analyzer.cpp
+  src/ftrace.cpp
+  src/trace_report.cpp
 )
 target_include_directories(rtdoctor_core PUBLIC include)
 target_compile_options(rtdoctor_core PRIVATE -Wall -Wextra -Wpedantic)
@@ -29,10 +33,23 @@ endif()
 
 enable_testing()
 find_package(GTest REQUIRED)
-add_executable(rtdoctor_tests tests/test_checks.cpp tests/test_system_view.cpp)
+add_executable(rtdoctor_tests tests/test_checks.cpp tests/test_system_view.cpp tests/test_trace.cpp)
 target_link_libraries(rtdoctor_tests PRIVATE rtdoctor_core GTest::gtest_main)
 include(GoogleTest)
 gtest_discover_tests(rtdoctor_tests)
 
 # The real system: whatever the result, the command must run and produce JSON.
 add_test(NAME check_runs_on_this_system COMMAND sh -c "$<TARGET_FILE:rtdoctor> check --json > /dev/null; test $? -le 1")
+
+# End-to-end: a periodic task shares CPU 1 with a CPU hog; rtdoctor trace must
+# name the hog as what delays it. Needs ftrace (root; in a container --privileged),
+# skipped otherwise.
+add_executable(periodic_task tests/workloads/periodic_task.cpp)
+add_executable(cpu_hog tests/workloads/cpu_hog.cpp)
+add_test(NAME trace_names_the_task_that_delays_the_target
+  COMMAND sh -c "test -w /sys/kernel/tracing/instances 2>/dev/null || mount -t tracefs nodev /sys/kernel/tracing 2>/dev/null || exit 77; \
+    $<TARGET_FILE:cpu_hog> 1 6 & \
+    $<TARGET_FILE:periodic_task> 1 10 2 6 & \
+    sleep 0.5; $<TARGET_FILE:rtdoctor> trace --comm periodic --duration 3 --deadline-ms 4 > trace.txt; status=$?; wait; \
+    cat trace.txt; test $status -eq 0 && grep -q 'Thread periodic' trace.txt && grep -A2 'Who delayed it' trace.txt | grep -q 'task hog'")
+set_tests_properties(trace_names_the_task_that_delays_the_target PROPERTIES SKIP_RETURN_CODE 77)

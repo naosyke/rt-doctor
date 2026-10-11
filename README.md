@@ -94,7 +94,58 @@ rtdoctor check --fail-on warn   # exit code 1 on any warning, for CI
 ```
 
 Exit codes: 0 = no failures (or warnings with `--fail-on warn`), 1 = findings
-at or above the threshold, 2 = usage error.
+at or above the threshold, 2 = usage error, 3 = tracing unavailable (`trace`).
+
+## Trace: who delayed my task?
+
+`rtdoctor check` says what is wrong with the system. `rtdoctor trace` watches
+a running task and says **what ran on its CPU while it was ready but had to
+wait** - another task, an interrupt, a softirq, or the CPU waking from idle.
+
+```bash
+sudo rtdoctor trace --pid 1826 --duration 5 --deadline-ms 4
+```
+
+```
+rt-doctor trace - pid 1826 (periodic, 1 threads), 5.1 s, deadline 4.00 ms
+
+Thread periodic (tid 1826): 500 activations, 3 over the deadline
+  Response time (wake-up to sleep): median 2.92 ms, 99th 3.91 ms, max 5.92 ms
+  Waiting for its CPU: 504 times, 464.06 ms in total, max 3.00 ms (4 preemptions)
+
+  Who delayed it (ran on its CPU while it was ready)
+     460.23 ms  task hog (pid 1825)                             502 times
+       2.16 ms  irq 11 arch_timer                               503 times
+       0.51 ms  irq 6 IPI                                       189 times
+    -> Another task ran on the task's CPU while it was ready. Move that task to
+       another CPU (taskset, cgroup cpuset), or give the delayed task a
+       real-time priority (chrt -f) so it preempts the other one.
+```
+
+Following the advice (`chrt -f 50`) on the same machine:
+
+| | before | after `chrt -f 50` |
+|---|---|---|
+| over the 4 ms deadline | 3 of 500 | 0 of 500 |
+| response max | 5.92 ms | 2.07 ms |
+| waiting in total | 464 ms | 4.2 ms |
+| time taken by `hog` | 460 ms | 3.3 ms |
+
+How it works: a private ftrace instance (it does not disturb other tracers)
+records `sched_switch`, `sched_waking`, `sched_migrate_task` and the
+irq / softirq entry and exit events. Each wait of the target is split among
+whatever was running on its CPU at the time. The report also lists the worst
+activations with their own breakdown.
+
+```bash
+rtdoctor trace --pid N            # all threads of a process
+rtdoctor trace --comm NAME        # threads by name (as in /proc/*/task/*/comm)
+  --duration 10 --deadline-ms 2 --threads 3 --json
+```
+
+Needs root (or tracefs access). Inside a container, select by `--comm` or
+run the container with `--pid=host`: process ids in a container's PID
+namespace are not the ones the kernel traces.
 
 ## Build
 
@@ -113,6 +164,6 @@ isolated CPUs).
 
 * [x] `rtdoctor check` - system configuration
 * [ ] `rtdoctor latency` - wake-up latency per CPU (built-in, no cyclictest needed)
-* [ ] `rtdoctor trace --pid N` - when a task is late, **which other task or interrupt was running on its CPU**
+* [x] `rtdoctor trace --pid N` - when a task is late, **which other task or interrupt was running on its CPU**
 * [ ] `rtdoctor report` - everything in one shareable HTML file
 * [ ] Release binaries for x86-64 and arm64
