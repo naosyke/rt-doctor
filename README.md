@@ -94,7 +94,8 @@ rtdoctor check --fail-on warn   # exit code 1 on any warning, for CI
 ```
 
 Exit codes: 0 = no failures (or warnings with `--fail-on warn`), 1 = findings
-at or above the threshold, 2 = usage error, 3 = tracing unavailable (`trace`).
+at or above the threshold, 2 = usage error, 3 = tracing unavailable (`trace`; `report` notes it in the
+page instead).
 
 ## Trace: who delayed my task?
 
@@ -147,6 +148,23 @@ Needs root (or tracefs access). Inside a container, select by `--comm` or
 run the container with `--pid=host`: process ids in a container's PID
 namespace are not the ones the kernel traces.
 
+## Report: one file to share
+
+```bash
+sudo rtdoctor report -o report.html                                   # checks only
+sudo rtdoctor report -o report.html --pid 1826 --duration 10 --deadline-ms 4   # checks + trace
+```
+
+`report.html` is a single self-contained page (no scripts, nothing loaded
+from the internet; light and dark mode; prints well) to attach to a ticket or
+send to a customer or colleague:
+
+* the machine (host, kernel, CPU) and the **biggest factor** first
+* for the traced task: response time histogram with the deadline, **who
+  delayed it** as bars with what to do, and the worst activations split into
+  running time and what it waited for
+* every check, findings first, ordered by impact
+
 ## Build
 
 ```bash
@@ -165,5 +183,5 @@ isolated CPUs).
 * [x] `rtdoctor check` - system configuration
 * [ ] `rtdoctor latency` - wake-up latency per CPU (built-in, no cyclictest needed)
 * [x] `rtdoctor trace --pid N` - when a task is late, **which other task or interrupt was running on its CPU**
-* [ ] `rtdoctor report` - everything in one shareable HTML file
+* [x] `rtdoctor report` - everything in one shareable HTML file
 * [ ] Release binaries for x86-64 and arm64

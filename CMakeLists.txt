@@ -19,6 +19,7 @@ add_library(rtdoctor_core
   src/analyzer.cpp
   src/ftrace.cpp
   src/trace_report.cpp
+  src/html_report.cpp
 )
 target_include_directories(rtdoctor_core PUBLIC include)
 target_compile_options(rtdoctor_core PRIVATE -Wall -Wextra -Wpedantic)
@@ -33,7 +34,7 @@ endif()
 
 enable_testing()
 find_package(GTest REQUIRED)
-add_executable(rtdoctor_tests tests/test_checks.cpp tests/test_system_view.cpp tests/test_trace.cpp)
+add_executable(rtdoctor_tests tests/test_checks.cpp tests/test_system_view.cpp tests/test_trace.cpp tests/test_html_report.cpp)
 target_link_libraries(rtdoctor_tests PRIVATE rtdoctor_core GTest::gtest_main)
 include(GoogleTest)
 gtest_discover_tests(rtdoctor_tests)
@@ -53,3 +54,12 @@ add_test(NAME trace_names_the_task_that_delays_the_target
     sleep 0.5; $<TARGET_FILE:rtdoctor> trace --comm periodic --duration 3 --deadline-ms 4 > trace.txt; status=$?; wait; \
     cat trace.txt; test $status -eq 0 && grep -q 'Thread periodic' trace.txt && grep -A2 'Who delayed it' trace.txt | grep -q 'task hog'")
 set_tests_properties(trace_names_the_task_that_delays_the_target PROPERTIES SKIP_RETURN_CODE 77)
+
+# The same scenario as one HTML report: checks plus the trace, naming the hog.
+add_test(NAME report_writes_checks_and_trace
+  COMMAND sh -c "test -w /sys/kernel/tracing/instances 2>/dev/null || mount -t tracefs nodev /sys/kernel/tracing 2>/dev/null || exit 77; \
+    $<TARGET_FILE:cpu_hog> 1 6 & \
+    $<TARGET_FILE:periodic_task> 1 10 2 6 & \
+    sleep 0.5; $<TARGET_FILE:rtdoctor> report -o report.html --comm periodic --duration 3 --deadline-ms 4; status=$?; wait; \
+    test $status -eq 0 && grep -q 'System checks' report.html && grep -q 'Thread periodic' report.html && grep -q 'task hog' report.html")
+set_tests_properties(report_writes_checks_and_trace PROPERTIES SKIP_RETURN_CODE 77)
