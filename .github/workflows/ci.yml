@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build libgtest-dev
+      - name: Build
+        run: cmake -S . -B build -G Ninja -DRTDOCTOR_STATIC=ON && cmake --build build
+      - name: Test (as root, so the ftrace end-to-end tests run too)
+        run: sudo ctest --test-dir build --output-on-failure
+      - name: Check this runner
+        run: |
+          sudo build/rtdoctor check || true
+          sudo build/rtdoctor report -o report.html --lang ja
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ matrix.runner }}
+          path: report.html

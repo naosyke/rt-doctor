@@ -2,3 +2,6 @@ build/
 .DS_Store
 .claude/
 .vscode/
+build-release/
+dist/
+build-static/

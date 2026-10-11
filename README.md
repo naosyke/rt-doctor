@@ -84,6 +84,21 @@ why".
 Some values are only visible with root (e.g. the preemption mode of
 `PREEMPT_DYNAMIC` kernels in debugfs); run with `sudo` for the full picture.
 
+## Install
+
+One static binary for x86-64 or arm64 Linux, with no dependencies: it runs on
+any distribution (tested on Ubuntu, Debian 11, Fedora, Amazon Linux 2, Alpine
+and BusyBox), on robots, boards and servers alike.
+
+```bash
+curl -fsSL https://github.com/naosyke/rt-doctor/releases/latest/download/install.sh | sh
+```
+
+The script picks the build for the machine, checks it against the published
+SHA256SUMS and installs it to `/usr/local/bin` (`PREFIX=...` to change). Or
+download `rtdoctor-linux-x86_64.tar.gz` / `rtdoctor-linux-arm64.tar.gz` from
+the [releases](https://github.com/naosyke/rt-doctor/releases) yourself.
+
 ## Usage
 
 ```bash
@@ -182,10 +197,25 @@ are tested against fake `/proc` and `/sys` trees of typical machines (a tuned
 real-time machine, a desktop, Docker Desktop, a machine with interrupts on
 isolated CPUs).
 
+### Releasing
+
+CI builds and tests on x86-64 and arm64 for every push (as root, so the ftrace
+end-to-end tests run as well). To publish a release, set the version in
+`CMakeLists.txt` and push a matching tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow builds both binaries with `scripts/package.sh` (which
+refuses a tag that does not match the version), and publishes them with
+`SHA256SUMS` and `install.sh`.
+
 ## Roadmap
 
 * [x] `rtdoctor check` - system configuration
 * [ ] `rtdoctor latency` - wake-up latency per CPU (built-in, no cyclictest needed)
 * [x] `rtdoctor trace --pid N` - when a task is late, **which other task or interrupt was running on its CPU**
 * [x] `rtdoctor report` - everything in one shareable HTML file
-* [ ] Release binaries for x86-64 and arm64
+* [x] Release binaries for x86-64 and arm64 (built by GitHub Actions on tags)
