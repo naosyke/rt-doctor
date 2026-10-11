@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 
+#include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 
 #include "fake_system.hpp"
 #include "rtdoctor/html_report.hpp"
+#include "rtdoctor/i18n.hpp"
 
 using namespace rtdoctor;
 
@@ -16,13 +19,23 @@ std::size_t count(const std::string& text, const std::string& part) {
     return n;
 }
 
+// Real check results: a kernel without full preemption (high impact) and SMT
+// (low impact) as findings, and a passing clock source.
 std::vector<CheckResult> findings() {
-    return {
-        {"kernel_preemption", "Kernel preemption", Status::Warn, "voluntary", "Long kernel paths.", "Use PREEMPT_RT.",
-         Impact::High},
-        {"smt", "Simultaneous multithreading", Status::Warn, "on", "Siblings share a core.", "Turn it off.", Impact::Low},
-        {"clocksource", "Clock source", Status::Pass, "tsc", "", "", Impact::Low},
-    };
+    FakeSystem fake;
+    fake.file("proc/version", "Linux version 6.8.0 #1 SMP PREEMPT_DYNAMIC\n")
+        .file("sys/kernel/debug/sched/preempt", "none (voluntary) full\n")
+        .file("sys/devices/system/cpu/smt/active", "1\n")
+        .file("sys/devices/system/cpu/clocksource/clocksource0/current_clocksource", "tsc\n");
+    const SystemView system(fake.root());
+    auto preemption = check_kernel_preemption(system);
+    preemption.impact = Impact::High;
+    auto smt = check_smt(system);
+    smt.status = Status::Warn;  // Info by default; make it a (low) finding.
+    smt.impact = Impact::Low;
+    auto clock = check_clocksource(system);
+    clock.impact = Impact::Low;
+    return {preemption, smt, clock};
 }
 
 TraceResult traced() {
@@ -68,7 +81,7 @@ TEST(HtmlReport, ChecksOnlyReportLeadsWithTheBiggestFactor) {
     print_html(out, HostInfo{"robot-01"}, findings(), std::nullopt);
     const auto html = out.str();
     EXPECT_NE(html.find("<!DOCTYPE html>"), std::string::npos);
-    EXPECT_NE(html.find("Biggest factor: Kernel preemption"), std::string::npos);
+    EXPECT_NE(html.find("Biggest factor: Kernel preemption model"), std::string::npos);
     EXPECT_EQ(html.find("<h2>Trace"), std::string::npos);
     // The high-impact finding comes before the low one, and the pass is folded away.
     EXPECT_LT(html.find("id=\"kernel_preemption\""), html.find("id=\"smt\""));
@@ -98,4 +111,45 @@ TEST(HtmlReport, ExplainsWhenTracingWasNotPossible) {
     std::ostringstream out;
     print_html(out, HostInfo{}, findings(), trace);
     EXPECT_NE(out.str().find("Tracing was not possible: tracefs is not available"), std::string::npos);
+}
+
+TEST(HtmlReport, JapaneseReportTranslatesPageChecksAndAdvice) {
+    std::ostringstream out;
+    print_html(out, HostInfo{}, findings(), traced(), 3, Lang::Ja);
+    const auto html = out.str();
+    EXPECT_NE(html.find("<html lang=\"ja\">"), std::string::npos);
+    EXPECT_NE(html.find("一番の要因: カーネルのプリエンプション方式"), std::string::npos);
+    EXPECT_NE(html.find("<dt>対策</dt><dd>PREEMPT_RT カーネルを使ってください"), std::string::npos);
+    EXPECT_NE(html.find("タスクの調査: 名前が「periodic」のスレッド"), std::string::npos);
+    EXPECT_NE(html.find("タスク &lt;hog&gt; (pid 7)"), std::string::npos);
+    EXPECT_NE(html.find("割り込み irq 11 arch_timer"), std::string::npos);
+    EXPECT_NE(html.find("対策:</b> タスクが動ける状態なのに"), std::string::npos);
+    EXPECT_EQ(html.find("Who delayed it"), std::string::npos);
+}
+
+TEST(I18n, EveryCheckTextOfTheTestMachinesHasAJapaneseVersion) {
+    // Translated: some Japanese in it, and no English words of 3+ letters
+    // left except technical terms (names, units, kernel parameters).
+    const auto still_english = [](const std::string& text) {
+        static const std::regex word("[A-Za-z]{3,}");
+        static const std::set<std::string> technical = {"voluntary", "nohz_full", "rcu_nocbs", "swapfile",
+                                                         "performance", "powersave", "MiB", "CPU"};
+        for (auto it = std::sregex_iterator(text.begin(), text.end(), word); it != std::sregex_iterator(); ++it) {
+            const auto w = it->str();
+            bool known = false;
+            for (const auto& term : technical) known = known || term.find(w) != std::string::npos;
+            if (!known) return true;
+        }
+        return false;
+    };
+    for (const auto& text : {"Kernel preemption model", "Permission to lock memory", "preemption: none or voluntary",
+                             "deepest enabled: C3 (exit latency 133 us)", "950000 us per 1000000 us",
+                             "on: /swapfile (12 MiB used of 1024 MiB)", "performance on 0-3, powersave on 4-7",
+                             "Add nohz_full=2-3 rcu_nocbs=2-3 to the kernel command line."}) {
+        const auto japanese = translate(Lang::Ja, text);
+        EXPECT_FALSE(still_english(japanese)) << text << " -> " << japanese;
+    }
+    EXPECT_EQ(translate(Lang::En, "Swap"), "Swap");
+    EXPECT_EQ(translate(Lang::Ja, "Swap"), "スワップ");
+    EXPECT_EQ(translate(Lang::Ja, "something new"), "something new");  // Falls back to English.
 }

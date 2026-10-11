@@ -7,6 +7,8 @@
 #include <map>
 #include <sstream>
 
+#include "rtdoctor/i18n.hpp"
+
 namespace rtdoctor {
 
 namespace {
@@ -28,7 +30,8 @@ const char* const kStyle = R"CSS(
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text);
-  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif; }
 main { max-width: 960px; margin: 0 auto; padding: 32px 16px 48px; }
 h1 { font-size: 24px; margin: 0 0 4px; }
 h2 { font-size: 18px; margin: 36px 0 12px; }
@@ -53,7 +56,7 @@ h3 { font-size: 15px; margin: 20px 0 8px; }
 .check .head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
 .check .title { font-weight: 600; }
 .check .value { color: var(--muted); overflow-wrap: anywhere; }
-.check dl { margin: 8px 0 0; display: grid; grid-template-columns: 40px 1fr; gap: 4px 8px; }
+.check dl { margin: 8px 0 0; display: grid; grid-template-columns: 44px 1fr; gap: 4px 8px; }
 .check dt { color: var(--muted); font-size: 13px; }
 .check dd { margin: 0; }
 details summary { cursor: pointer; color: var(--muted); padding: 6px 0; }
@@ -93,6 +96,24 @@ std::string fmt(const char* format, double value) {
 
 std::string ms(double seconds) { return format_ms(seconds); }
 
+// Picks the English or the Japanese wording of the page itself.
+struct Words {
+    Lang lang;
+    std::string operator()(const std::string& en, const std::string& ja) const { return lang == Lang::Ja ? ja : en; }
+    std::string tr(const std::string& english) const { return translate(lang, english); }
+    std::string impact(Impact impact) const {
+        if (lang == Lang::En) return std::string(to_string(impact));
+        switch (impact) {
+            case Impact::Critical: return "致命的";
+            case Impact::High: return "大";
+            case Impact::Medium: return "中";
+            case Impact::Low: return "小";
+            case Impact::Unset: break;
+        }
+        return "";
+    }
+};
+
 // The color of a kind of delay: another task, an interrupt, a softirq, idle.
 std::string color_of(const std::string& who) {
     if (who == "idle") return "var(--idle)";
@@ -117,83 +138,96 @@ double nice_step(double range, int ticks) {
     return 10 * power;
 }
 
-void print_host(std::ostream& out, const HostInfo& host) {
+void print_host(std::ostream& out, const HostInfo& host, const Words& w) {
     out << "<div class=\"card facts\">";
-    const auto fact = [&](const char* label, const std::string& value) {
+    const auto fact = [&](const std::string& label, const std::string& value) {
         if (!value.empty()) out << "<div><span>" << label << "</span><b>" << html_escape(value) << "</b></div>";
     };
-    fact("Host", host.hostname);
-    fact("Kernel", host.kernel);
+    fact(w("Host", "ホスト"), host.hostname);
+    fact(w("Kernel", "カーネル"), host.kernel);
     fact("CPU", host.cpu_model.empty() ? host.machine : host.cpu_model + " (" + host.machine + ")");
-    fact("Online CPUs", host.cpus > 0 ? std::to_string(host.cpus) : "");
-    fact("Kernel build", host.build);
-    fact("Generated", host.generated);
+    fact(w("Online CPUs", "使用中のCPU数"), host.cpus > 0 ? std::to_string(host.cpus) : "");
+    fact(w("Kernel build", "カーネルのビルド"), host.build);
+    fact(w("Generated", "作成日時"), host.generated);
     out << "</div>\n";
 }
 
-void print_verdict(std::ostream& out, const std::vector<CheckResult>& results) {
+void print_verdict(std::ostream& out, const std::vector<CheckResult>& results, const Words& w) {
     const auto findings = prioritized(results);
     const bool major = !findings.empty() && findings.front().impact != Impact::Low;
     if (!major) {
-        out << "<div class=\"card verdict pass\"><p class=\"big\">No major issues found</p><p>"
-            << (findings.empty() ? "Every check passed." : "Only minor findings; see the checks below.")
+        out << "<div class=\"card verdict pass\"><p class=\"big\">" << w("No major issues found", "大きな問題はありません")
+            << "</p><p>"
+            << (findings.empty() ? w("Every check passed.", "すべてのチェックに合格しました。")
+                                 : w("Only minor findings; see the checks below.",
+                                     "軽微な指摘のみです。下のチェック結果を見てください。"))
             << "</p></div>\n";
         return;
     }
     const auto& top = findings.front();
-    out << "<div class=\"card verdict " << lower(to_string(top.status)) << "\"><p class=\"big\">Biggest factor: "
-        << html_escape(top.title) << "</p><p>" << html_escape(top.value) << "</p><p>";
+    out << "<div class=\"card verdict " << lower(to_string(top.status)) << "\"><p class=\"big\">"
+        << w("Biggest factor: ", "一番の要因: ") << html_escape(w.tr(top.title)) << "</p><p>"
+        << html_escape(w.tr(top.value)) << "</p><p>";
     if (top.id == "virtualization") {
-        out << "As long as this system runs in a virtual machine, the hypervisor can pause it at any time. The other "
-               "fixes help, but cannot bring deadline misses to zero; measure on bare metal.";
+        out << html_escape(w.tr("As long as this system runs in a virtual machine, the hypervisor can pause it at any "
+                                "time. The other fixes help, but cannot bring deadline misses to zero; measure on "
+                                "bare metal."));
     } else {
-        out << "Fix this first: it has the largest effect on worst-case latency.";
+        out << w("Fix this first: it has the largest effect on worst-case latency.",
+                 "まずこれを直してください。最悪の遅延に一番大きく影響します。");
     }
     out << "</p>";
     if (findings.size() > 1) {
-        out << "<p>Then: ";
+        out << "<p>" << w("Then: ", "次に: ");
         for (std::size_t i = 1; i < findings.size(); ++i) {
-            out << (i > 1 ? ", " : "") << html_escape(findings[i].title) << " <span class=\"impact\">"
-                << to_string(findings[i].impact) << "</span>";
+            out << (i > 1 ? w(", ", "、") : "") << html_escape(w.tr(findings[i].title)) << " <span class=\"impact\">"
+                << w.impact(findings[i].impact) << "</span>";
         }
         out << "</p>";
     }
     out << "</div>\n";
 }
 
-void print_check(std::ostream& out, const CheckResult& r) {
+void print_check(std::ostream& out, const CheckResult& r, const Words& w) {
     const bool finding = r.status == Status::Warn || r.status == Status::Fail;
     out << "<div class=\"check\" id=\"" << html_escape(r.id) << "\"><div class=\"head\"><span class=\"pill "
         << to_string(r.status) << "\">" << to_string(r.status) << "</span>";
-    if (finding) out << "<span class=\"impact\">" << to_string(r.impact) << " impact</span>";
-    out << "<span class=\"title\">" << html_escape(r.title) << "</span><span class=\"value\">" << html_escape(r.value)
-        << "</span></div>";
+    if (finding) {
+        out << "<span class=\"impact\">" << w(w.impact(r.impact) + " impact", "影響: " + w.impact(r.impact)) << "</span>";
+    }
+    out << "<span class=\"title\">" << html_escape(w.tr(r.title)) << "</span><span class=\"value\">"
+        << html_escape(w.tr(r.value)) << "</span></div>";
     if (!r.why.empty() || !r.fix.empty()) {
         out << "<dl>";
-        if (!r.why.empty()) out << "<dt>Why</dt><dd>" << html_escape(r.why) << "</dd>";
-        if (!r.fix.empty()) out << "<dt>Fix</dt><dd>" << html_escape(r.fix) << "</dd>";
+        if (!r.why.empty()) out << "<dt>" << w("Why", "理由") << "</dt><dd>" << html_escape(w.tr(r.why)) << "</dd>";
+        if (!r.fix.empty()) out << "<dt>" << w("Fix", "対策") << "</dt><dd>" << html_escape(w.tr(r.fix)) << "</dd>";
         out << "</dl>";
     }
     out << "</div>\n";
 }
 
-void print_checks(std::ostream& out, const std::vector<CheckResult>& results) {
+void print_checks(std::ostream& out, const std::vector<CheckResult>& results, const Words& w) {
     std::map<Status, int> counts;
     for (const auto& r : results) ++counts[r.status];
-    out << "<h2>System checks</h2><p class=\"sub\">" << counts[Status::Fail] << " fail, " << counts[Status::Warn]
-        << " warn, " << counts[Status::Pass] << " pass, " << counts[Status::Info]
-        << " info. Findings are ordered by their typical effect on worst-case latency.</p>\n";
+    const auto n = [&](Status s) { return std::to_string(counts[s]); };
+    out << "<h2>" << w("System checks", "システムチェック") << "</h2><p class=\"sub\">"
+        << w(n(Status::Fail) + " fail, " + n(Status::Warn) + " warn, " + n(Status::Pass) + " pass, " +
+                 n(Status::Info) + " info. Findings are ordered by their typical effect on worst-case latency.",
+             "FAIL " + n(Status::Fail) + " 件、WARN " + n(Status::Warn) + " 件、PASS " + n(Status::Pass) + " 件、INFO " +
+                 n(Status::Info) + " 件。指摘は、最悪の遅延への影響が大きい順に並んでいます。")
+        << "</p>\n";
 
     out << "<div class=\"card\">";
     const auto findings = prioritized(results);
-    if (findings.empty()) out << "<p>No findings.</p>";
-    for (const auto& r : findings) print_check(out, r);
+    if (findings.empty()) out << "<p>" << w("No findings.", "指摘はありません。") << "</p>";
+    for (const auto& r : findings) print_check(out, r, w);
     out << "</div>\n";
 
-    out << "<div class=\"card\"><details><summary>" << counts[Status::Pass] + counts[Status::Info]
-        << " checks without findings</summary>";
+    const auto rest = std::to_string(counts[Status::Pass] + counts[Status::Info]);
+    out << "<div class=\"card\"><details><summary>"
+        << w(rest + " checks without findings", "指摘のないチェック " + rest + " 件") << "</summary>";
     for (const auto& r : results) {
-        if (r.status == Status::Pass || r.status == Status::Info) print_check(out, r);
+        if (r.status == Status::Pass || r.status == Status::Info) print_check(out, r, w);
     }
     out << "</details></div>\n";
 }
@@ -201,7 +235,7 @@ void print_checks(std::ostream& out, const std::vector<CheckResult>& results) {
 // Histogram of response times with the deadline marked. Counts are on a
 // log scale so that the rare slow activations stay visible next to the
 // thousands of normal ones.
-void print_histogram(std::ostream& out, const std::vector<double>& responses, double deadline) {
+void print_histogram(std::ostream& out, const std::vector<double>& responses, double deadline, const Words& w) {
     if (responses.empty()) return;
     const double width = 720, height = 190, left = 36, bottom = 26, top = 14;
     const double plot_w = width - left - 10, plot_h = height - bottom - top;
@@ -217,8 +251,8 @@ void print_histogram(std::ostream& out, const std::vector<double>& responses, do
     const double y_max = std::log10(peak + 1.0);
     const auto x = [&](double value_ms) { return left + value_ms / x_max * plot_w; };
 
-    out << "<svg class=\"hist\" viewBox=\"0 0 " << width << " " << height
-        << "\" role=\"img\" aria-label=\"Histogram of response times\">";
+    out << "<svg class=\"hist\" viewBox=\"0 0 " << width << " " << height << "\" role=\"img\" aria-label=\""
+        << w("Histogram of response times", "応答時間の分布") << "\">";
     // Y grid: 1, 10, 100, ... activations.
     for (int power = 0; std::pow(10, power) <= peak; ++power) {
         const double y = top + plot_h - std::log10(std::pow(10, power) + 1.0) / y_max * plot_h;
@@ -232,89 +266,102 @@ void print_histogram(std::ostream& out, const std::vector<double>& responses, do
         const double h = std::max(1.5, std::log10(counts[i] + 1.0) / y_max * plot_h);
         const double start_ms = x_max * i / bins;
         const bool late = deadline > 0 && start_ms + x_max / bins > deadline * 1000;
+        const std::string range = fmt("%.2f", start_ms) + "-" + fmt("%.2f", start_ms + x_max / bins) + " ms";
         out << "<rect x=\"" << fmt("%.1f", left + i * bar_w + 0.5) << "\" y=\"" << fmt("%.1f", top + plot_h - h)
             << "\" width=\"" << fmt("%.1f", std::max(1.0, bar_w - 1)) << "\" height=\"" << fmt("%.1f", h)
-            << "\" rx=\"1\" fill=\"" << (late ? "var(--fail)" : "var(--info)") << "\"><title>" << counts[i]
-            << " activations, " << fmt("%.2f", start_ms) << "-" << fmt("%.2f", start_ms + x_max / bins)
-            << " ms</title></rect>";
+            << "\" rx=\"1\" fill=\"" << (late ? "var(--fail)" : "var(--info)") << "\"><title>"
+            << w(std::to_string(counts[i]) + " activations, " + range, range + ": " + std::to_string(counts[i]) + " 回")
+            << "</title></rect>";
     }
     const double step = nice_step(x_max, 6);
     for (double t = 0; t <= x_max + 1e-9; t += step) {
         out << "<text x=\"" << fmt("%.1f", x(t)) << "\" y=\"" << height - 8 << "\" text-anchor=\"middle\">"
             << fmt(step < 1 ? "%.1f" : "%.0f", t) << "</text>";
     }
-    out << "<text x=\"" << width - 10 << "\" y=\"" << top - 2 << "\" text-anchor=\"end\">response time (ms)</text>";
+    out << "<text x=\"" << width - 10 << "\" y=\"" << top - 2 << "\" text-anchor=\"end\">"
+        << w("response time (ms)", "横軸: 応答時間 (ms)、縦軸: 回数") << "</text>";
     out << "<line x1=\"" << left << "\" x2=\"" << width - 10 << "\" y1=\"" << top + plot_h << "\" y2=\""
         << top + plot_h << "\" stroke=\"var(--muted)\"/>";
     if (deadline > 0) {
         const double dx = x(deadline * 1000);
         out << "<line x1=\"" << fmt("%.1f", dx) << "\" x2=\"" << fmt("%.1f", dx) << "\" y1=\"" << top - 4
             << "\" y2=\"" << top + plot_h << "\" stroke=\"var(--fail)\" stroke-width=\"2\" stroke-dasharray=\"5 4\"/>"
-            << "<text x=\"" << fmt("%.1f", dx + 5) << "\" y=\"" << top + 10 << "\" style=\"fill:var(--fail)\">deadline "
-            << html_escape(ms(deadline)) << "</text>";
+            << "<text x=\"" << fmt("%.1f", dx + 5) << "\" y=\"" << top + 10 << "\" style=\"fill:var(--fail)\">"
+            << w("deadline ", "期限 ") << html_escape(ms(deadline)) << "</text>";
     }
     out << "</svg>\n";
 }
 
-void print_legend(std::ostream& out, bool with_run) {
-    out << "<div class=\"legend\">";
-    if (with_run) out << "<span><i style=\"background:var(--run)\"></i>running itself</span>";
-    out << "<span><i style=\"background:var(--task)\"></i>another task</span>"
-           "<span><i style=\"background:var(--irq)\"></i>interrupt</span>"
-           "<span><i style=\"background:var(--softirq)\"></i>softirq</span>"
-           "<span><i style=\"background:var(--idle)\"></i>CPU waking from idle</span></div>\n";
+void print_legend(std::ostream& out, const Words& w) {
+    out << "<div class=\"legend\"><span><i style=\"background:var(--run)\"></i>" << w("running itself", "自分の処理")
+        << "</span><span><i style=\"background:var(--task)\"></i>" << w("another task", "他のタスク")
+        << "</span><span><i style=\"background:var(--irq)\"></i>" << w("interrupt", "割り込み")
+        << "</span><span><i style=\"background:var(--softirq)\"></i>" << w("softirq", "softirq（割り込みの後処理）")
+        << "</span><span><i style=\"background:var(--idle)\"></i>" << w("CPU waking from idle", "CPU の休止からの復帰")
+        << "</span></div>\n";
 }
 
-void print_thread(std::ostream& out, const ThreadReport& t, double deadline) {
-    out << "<div class=\"card\"><h3>Thread " << html_escape(t.comm) << " <span class=\"impact\">tid " << t.tid
-        << "</span></h3><div class=\"tiles\">";
-    const auto tile = [&](const char* label, const std::string& value, const char* cls = "") {
+void print_thread(std::ostream& out, const ThreadReport& t, double deadline, const Words& w) {
+    out << "<div class=\"card\"><h3>" << w("Thread ", "スレッド ") << html_escape(t.comm)
+        << " <span class=\"impact\">tid " << t.tid << "</span></h3><div class=\"tiles\">";
+    const auto tile = [&](const std::string& label, const std::string& value, const char* cls = "") {
         out << "<div class=\"tile " << cls << "\"><span>" << label << "</span><b>" << html_escape(value) << "</b></div>";
     };
-    tile("Activations", std::to_string(t.activations));
-    if (deadline > 0) tile("Over the deadline", std::to_string(t.misses), t.misses > 0 ? "bad" : "good");
-    tile("Median response", ms(percentile(t.responses, 0.5)));
-    tile("99th percentile", ms(percentile(t.responses, 0.99)));
-    tile("Worst response", ms(percentile(t.responses, 1.0)),
+    tile(w("Activations", "実行回数"), std::to_string(t.activations));
+    if (deadline > 0) tile(w("Over the deadline", "期限切れ"), std::to_string(t.misses), t.misses > 0 ? "bad" : "good");
+    tile(w("Median response", "応答時間の中央値"), ms(percentile(t.responses, 0.5)));
+    tile(w("99th percentile", "99パーセンタイル"), ms(percentile(t.responses, 0.99)));
+    tile(w("Worst response", "最悪の応答時間"), ms(percentile(t.responses, 1.0)),
          deadline > 0 ? (percentile(t.responses, 1.0) > deadline ? "bad" : "good") : "");
-    tile("Waited for its CPU", ms(t.waited_total));
+    tile(w("Waited for its CPU", "CPU の空き待ち合計"), ms(t.waited_total));
     out << "</div>";
-    print_histogram(out, t.responses, deadline);
+    print_histogram(out, t.responses, deadline, w);
 
     if (!t.delays.empty()) {
-        out << "<h3>Who delayed it</h3><p class=\"sub\">What ran on its CPU while it was ready to run, over the whole "
-               "trace. Waited "
-            << t.waits << " times, " << html_escape(ms(t.waited_total)) << " in total, longest "
-            << html_escape(ms(t.waited_max)) << ", preempted " << t.preemptions << " times.</p>";
+        const auto waits = std::to_string(t.waits), preempted = std::to_string(t.preemptions);
+        out << "<h3>" << w("Who delayed it", "誰が遅らせたか") << "</h3><p class=\"sub\">"
+            << w("What ran on its CPU while it was ready to run, over the whole trace. Waited " + waits + " times, " +
+                     ms(t.waited_total) + " in total, longest " + ms(t.waited_max) + ", preempted " + preempted +
+                     " times.",
+                 "動ける状態なのに待たされていた間、その CPU で何が動いていたか（計測期間全体）。待ちは " + waits +
+                     " 回、合計 " + ms(t.waited_total) + "、最長 " + ms(t.waited_max) + "、実行中に横取りされた回数 " +
+                     preempted + " 回。")
+            << "</p>";
         const double largest = t.delays.front().seconds;
         for (std::size_t d = 0; d < t.delays.size() && d < 6; ++d) {
             const auto& delay = t.delays[d];
-            out << "<div class=\"who\"><span class=\"name\">" << html_escape(delay.who) << "</span><span class=\"ms\">"
-                << html_escape(ms(delay.seconds)) << "</span><span class=\"bar\"><i style=\"width:"
+            const auto count = std::to_string(delay.count);
+            out << "<div class=\"who\"><span class=\"name\">" << html_escape(w.tr(delay.who))
+                << "</span><span class=\"ms\">" << html_escape(ms(delay.seconds))
+                << "</span><span class=\"bar\"><i style=\"width:"
                 << fmt("%.1f", largest > 0 ? std::max(0.5, delay.seconds / largest * 100) : 0) << "%;background:"
-                << color_of(delay.who) << "\"></i></span><span class=\"count\">in " << delay.count
-                << " waits</span></div>";
+                << color_of(delay.who) << "\"></i></span><span class=\"count\">"
+                << w("in " + count + " waits", count + " 回の待ちで発生") << "</span></div>";
         }
-        out << "<p class=\"advice\"><b>What to do:</b> " << html_escape(advice_for(t.delays.front().who)) << "</p>";
+        out << "<p class=\"advice\"><b>" << w("What to do:", "対策:") << "</b> "
+            << html_escape(w.tr(advice_for(t.delays.front().who))) << "</p>";
     }
 
     if (!t.worst.empty()) {
-        out << "<h3>Worst activations</h3><p class=\"sub\">Each bar is one activation from wake-up to sleep: the time "
-               "it ran itself and what it waited for.</p>";
-        print_legend(out, true);
+        out << "<h3>" << w("Worst activations", "時間がかかった回ワースト") << "</h3><p class=\"sub\">"
+            << w("Each bar is one activation from wake-up to sleep: the time it ran itself and what it waited for.",
+                 "1本の棒が1回分（起きてから寝るまで）です。自分の処理の時間と、何に待たされたかを表します。"
+                 "赤い点線が期限です。")
+            << "</p>";
+        print_legend(out, w);
         double scale = std::max(t.worst.front().response, deadline);
         for (const auto& a : t.worst) {
             const auto pct = [&](double seconds) { return fmt("%.2f", std::max(0.0, seconds / scale * 100)); };
-            out << "<div class=\"act\"><div class=\"label\"><span>CPU " << a.cpu << " &middot; waited "
-                << html_escape(ms(a.waited)) << "</span><b>" << html_escape(ms(a.response))
+            out << "<div class=\"act\"><div class=\"label\"><span>CPU " << a.cpu << " &middot; "
+                << w("waited ", "待ち ") << html_escape(ms(a.waited)) << "</span><b>" << html_escape(ms(a.response))
                 << "</b></div><div class=\"track\"><div class=\"seg\">";
-            out << "<i style=\"width:" << pct(a.response - a.waited) << "%;background:var(--run)\" title=\"running "
-                << html_escape(ms(a.response - a.waited)) << "\"></i>";
+            out << "<i style=\"width:" << pct(a.response - a.waited) << "%;background:var(--run)\" title=\""
+                << w("running ", "自分の処理 ") << html_escape(ms(a.response - a.waited)) << "\"></i>";
             double attributed = 0;
             for (const auto& d : a.delays) {
                 attributed += d.seconds;
                 out << "<i style=\"width:" << pct(d.seconds) << "%;background:" << color_of(d.who) << "\" title=\""
-                    << html_escape(d.who + " " + ms(d.seconds)) << "\"></i>";
+                    << html_escape(w.tr(d.who) + " " + ms(d.seconds)) << "\"></i>";
             }
             if (a.waited - attributed > 0) {
                 out << "<i style=\"width:" << pct(a.waited - attributed) << "%;background:var(--other)\"></i>";
@@ -323,7 +370,8 @@ void print_thread(std::ostream& out, const ThreadReport& t, double deadline) {
             if (deadline > 0) out << "<span class=\"deadline\" style=\"left:" << pct(deadline) << "%\"></span>";
             out << "</div><div class=\"label\"><span>";
             for (std::size_t d = 0; d < a.delays.size() && d < 3; ++d) {
-                out << (d ? ", " : "") << html_escape(a.delays[d].who) << " " << html_escape(ms(a.delays[d].seconds));
+                out << (d ? w(", ", "、") : "") << html_escape(w.tr(a.delays[d].who)) << " "
+                    << html_escape(ms(a.delays[d].seconds));
             }
             out << "</span></div></div>\n";
         }
@@ -331,32 +379,50 @@ void print_thread(std::ostream& out, const ThreadReport& t, double deadline) {
     out << "</div>\n";
 }
 
-void print_trace(std::ostream& out, const TraceResult& trace, std::size_t max_threads) {
+void print_trace(std::ostream& out, const TraceResult& trace, std::size_t max_threads, const Words& w) {
     const auto& s = trace.summary;
-    out << "<h2>Trace: " << html_escape(s.target) << "</h2>";
+    out << "<h2>" << w("Trace: ", "タスクの調査: ") << html_escape(w.tr(s.target)) << "</h2>";
     if (!trace.error.empty()) {
-        out << "<div class=\"card\"><p class=\"note\">Tracing was not possible: " << html_escape(trace.error)
-            << "</p><p>Run rtdoctor report as root (or in a container with --privileged).</p></div>\n";
+        out << "<div class=\"card\"><p class=\"note\">" << w("Tracing was not possible: ", "調査できませんでした: ")
+            << html_escape(trace.error) << "</p><p>"
+            << w("Run rtdoctor report as root (or in a container with --privileged).",
+                 "rtdoctor report を root で実行してください（コンテナなら --privileged 付きで）。")
+            << "</p></div>\n";
         return;
     }
-    out << "<p class=\"sub\">" << fmt("%.1f", s.duration) << " s traced";
-    if (s.deadline > 0) out << ", deadline " << html_escape(ms(s.deadline));
-    out << ". An activation runs from the task's wake-up until it sleeps again.</p>";
+    out << "<p class=\"sub\">"
+        << w(fmt("%.1f", s.duration) + " s traced" + (s.deadline > 0 ? ", deadline " + ms(s.deadline) : "") +
+                 ". An activation runs from the task's wake-up until it sleeps again.",
+             fmt("%.1f", s.duration) + " 秒間の計測" + (s.deadline > 0 ? "、期限 " + ms(s.deadline) : "") +
+                 "。「1回の実行」は、タスクが起きてから再び寝るまでです。")
+        << "</p>";
     if (s.lost_events > 0) {
-        out << "<p class=\"note\">The kernel dropped " << s.lost_events
-            << " trace events (buffer full); the numbers may be incomplete. Trace a shorter time.</p>";
+        const auto lost = std::to_string(s.lost_events);
+        out << "<p class=\"note\">"
+            << w("The kernel dropped " + lost +
+                     " trace events (buffer full); the numbers may be incomplete. Trace a shorter time.",
+                 "カーネルが記録を " + lost +
+                     " 件取りこぼしました（バッファが満杯）。数値が不完全な可能性があります。計測時間を短くしてください。")
+            << "</p>";
     }
     if (trace.threads.empty()) {
-        out << "<div class=\"card\"><p>The target never woke up and went back to sleep during the trace (no "
-               "activations). Is it running, and does it sleep between its periodic work?</p></div>\n";
+        out << "<div class=\"card\"><p>"
+            << w("The target never woke up and went back to sleep during the trace (no activations). Is it running, "
+                 "and does it sleep between its periodic work?",
+                 "計測中、対象が「起きて、また寝る」ことが一度もありませんでした。対象は動いていますか？周期処理の"
+                 "合間に休んでいますか？")
+            << "</p></div>\n";
         return;
     }
     for (std::size_t i = 0; i < trace.threads.size() && i < max_threads; ++i) {
-        print_thread(out, trace.threads[i], s.deadline);
+        print_thread(out, trace.threads[i], s.deadline, w);
     }
     if (trace.threads.size() > max_threads) {
-        out << "<p class=\"sub\">" << trace.threads.size() - max_threads
-            << " more threads not shown (use --threads N).</p>";
+        const auto more = std::to_string(trace.threads.size() - max_threads);
+        out << "<p class=\"sub\">"
+            << w(more + " more threads not shown (use --threads N).",
+                 "ほかに " + more + " 個のスレッドがあります（--threads N で表示）。")
+            << "</p>";
     }
 }
 
@@ -407,22 +473,28 @@ HostInfo read_host_info(const SystemView& system) {
 }
 
 void print_html(std::ostream& out, const HostInfo& host, const std::vector<CheckResult>& results,
-                const std::optional<TraceResult>& trace, std::size_t max_threads) {
-    out << "<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
+                const std::optional<TraceResult>& trace, std::size_t max_threads, Lang lang) {
+    const Words w{lang};
+    const std::string name = html_escape(host.hostname.empty() ? w("this system", "このシステム") : host.hostname);
+    out << "<!DOCTYPE html>\n<html lang=\"" << w("en", "ja") << "\"><head><meta charset=\"utf-8\">"
            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-           "<meta name=\"color-scheme\" content=\"light dark\"><title>rt-doctor report"
-        << (host.hostname.empty() ? "" : " - " + html_escape(host.hostname)) << "</title><style>" << kStyle
-        << "</style></head><body><main>\n";
-    out << "<h1>rt-doctor report</h1><p class=\"sub\">Real-time readiness of "
-        << html_escape(host.hostname.empty() ? "this system" : host.hostname)
-        << (trace ? " and what delayed the traced task" : "") << ".</p>\n";
-    print_host(out, host);
-    print_verdict(out, results);
-    if (trace) print_trace(out, *trace, max_threads);
-    print_checks(out, results);
-    out << "<footer>Generated by rt-doctor " << html_escape(host.version)
-        << ". The checks read /proc and /sys; the trace uses a private ftrace instance.</footer>\n"
-           "</main></body></html>\n";
+           "<meta name=\"color-scheme\" content=\"light dark\"><title>"
+        << w("rt-doctor report", "rt-doctor レポート") << (host.hostname.empty() ? "" : " - " + html_escape(host.hostname))
+        << "</title><style>" << kStyle << "</style></head><body><main>\n";
+    out << "<h1>" << w("rt-doctor report", "rt-doctor レポート") << "</h1><p class=\"sub\">"
+        << w("Real-time readiness of " + name + (trace ? " and what delayed the traced task." : "."),
+             name + " のリアルタイム性能の診断" + (trace ? "と、指定したタスクを遅らせた原因の調査。" : "。"))
+        << "</p>\n";
+    print_host(out, host, w);
+    print_verdict(out, results, w);
+    if (trace) print_trace(out, *trace, max_threads, w);
+    print_checks(out, results, w);
+    out << "<footer>"
+        << w("Generated by rt-doctor " + html_escape(host.version) +
+                 ". The checks read /proc and /sys; the trace uses a private ftrace instance.",
+             "rt-doctor " + html_escape(host.version) +
+                 " で作成。チェックは /proc と /sys を読み取り、調査は専用の ftrace インスタンスを使っています。")
+        << "</footer>\n</main></body></html>\n";
 }
 
 }  // namespace rtdoctor

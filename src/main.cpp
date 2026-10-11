@@ -38,7 +38,7 @@ int usage() {
                  "       rtdoctor trace (--pid PID | --comm NAME) [--duration SECONDS] [--deadline-ms MS]\n"
                  "                      [--threads N] [--json]\n"
                  "       rtdoctor report [-o FILE] [--pid PID | --comm NAME] [--duration SECONDS]\n"
-                 "                       [--deadline-ms MS] [--threads N] [--root DIR]\n"
+                 "                       [--deadline-ms MS] [--threads N] [--lang en|ja] [--root DIR]\n"
                  "       rtdoctor --version\n";
     return 2;
 }
@@ -153,11 +153,16 @@ int trace(int argc, char** argv) {
 int report(int argc, char** argv) {
     TraceRequest request;
     std::string output = "rtdoctor-report.html", root = "/";
+    rtdoctor::Lang lang = rtdoctor::Lang::En;
     for (int i = 0; i < argc; ++i) {
         const std::string arg = argv[i];
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) output = argv[++i];
         else if (arg == "--root" && i + 1 < argc) root = argv[++i];
-        else if (!request.parse(argc, argv, i)) return usage();
+        else if (arg == "--lang" && i + 1 < argc) {
+            const auto parsed = rtdoctor::parse_lang(argv[++i]);
+            if (!parsed) return usage();
+            lang = *parsed;
+        } else if (!request.parse(argc, argv, i)) return usage();
     }
     if (request.wanted() && !request.valid()) return usage();
 
@@ -185,7 +190,7 @@ int report(int argc, char** argv) {
         std::cerr << "rtdoctor: cannot write " << output << "\n";
         return 2;
     }
-    rtdoctor::print_html(file, host, results, traced, request.max_threads);
+    rtdoctor::print_html(file, host, results, traced, request.max_threads, lang);
     file.close();
     if (!file) {
         std::cerr << "rtdoctor: cannot write " << output << "\n";

@@ -20,6 +20,7 @@ add_library(rtdoctor_core
   src/ftrace.cpp
   src/trace_report.cpp
   src/html_report.cpp
+  src/i18n.cpp
 )
 target_include_directories(rtdoctor_core PUBLIC include)
 target_compile_options(rtdoctor_core PRIVATE -Wall -Wextra -Wpedantic)

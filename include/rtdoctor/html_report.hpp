@@ -10,6 +10,7 @@
 
 #include "rtdoctor/analyzer.hpp"
 #include "rtdoctor/checks.hpp"
+#include "rtdoctor/i18n.hpp"
 #include "rtdoctor/system_view.hpp"
 #include "rtdoctor/trace_report.hpp"
 
@@ -37,7 +38,7 @@ struct TraceResult {
 };
 
 void print_html(std::ostream& out, const HostInfo& host, const std::vector<CheckResult>& results,
-                const std::optional<TraceResult>& trace, std::size_t max_threads = 3);
+                const std::optional<TraceResult>& trace, std::size_t max_threads = 3, Lang lang = Lang::En);
 
 std::string html_escape(const std::string& text);
 

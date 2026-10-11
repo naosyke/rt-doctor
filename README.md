@@ -153,6 +153,7 @@ namespace are not the ones the kernel traces.
 ```bash
 sudo rtdoctor report -o report.html                                   # checks only
 sudo rtdoctor report -o report.html --pid 1826 --duration 10 --deadline-ms 4   # checks + trace
+sudo rtdoctor report -o report.html --lang ja                         # in Japanese (日本語)
 ```
 
 `report.html` is a single self-contained page (no scripts, nothing loaded
@@ -164,6 +165,9 @@ send to a customer or colleague:
   delayed it** as bars with what to do, and the worst activations split into
   running time and what it waited for
 * every check, findings first, ordered by impact
+
+`--lang ja` writes the whole page in Japanese, including every explanation,
+fix and piece of advice.
 
 ## Build
 
