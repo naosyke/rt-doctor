@@ -219,3 +219,12 @@ refuses a tag that does not match the version), and publishes them with
 * [x] `rtdoctor trace --pid N` - when a task is late, **which other task or interrupt was running on its CPU**
 * [x] `rtdoctor report` - everything in one shareable HTML file
 * [x] Release binaries for x86-64 and arm64 (built by GitHub Actions on tags)
+
+## License
+
+rt-doctor is open source under the [Apache License 2.0](LICENSE): free to
+use, modify and ship, also commercially. Copyright 2026 naosyke.
+
+Built only on public Linux interfaces and documentation (procfs, sysfs,
+ftrace, kernel docs). Independent personal project, not affiliated with any
+employer.
