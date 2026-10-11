@@ -222,6 +222,7 @@ const std::vector<std::pair<std::regex, std::string>>& japanese_patterns() {
         {std::regex(R"(^task (.*) \(pid (\d+)\)$)"), "タスク $1 (pid $2)"},
         {std::regex(R"(^irq (\d+) (.*)$)"), "割り込み irq $1 $2"},
         {std::regex(R"(^pid (\d+) \((.*), (\d+) threads\)$)"), "pid $1（$2、スレッド $3 個）"},
+        {std::regex(R"(^threads named (.*) \(pid (\d+) in a container\)$)"), "名前が $1 のスレッド（コンテナ内の pid $2）"},
         {std::regex(R"re(^threads named "(.*)"$)re"), "名前が「$1」のスレッド"},
     };
     return patterns;

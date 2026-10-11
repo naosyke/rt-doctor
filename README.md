@@ -1,130 +1,107 @@
 # rt-doctor
 
-**Find out why your real-time Linux misses deadlines.**
+**リアルタイム Linux の「ときどき期限に間に合わない」原因を見つけるツール**
 
-`rtdoctor` checks a Linux system for everything that adds latency to
-real-time work - the kernel's preemption model, CPU isolation, interrupts,
-frequency scaling, idle states, memory settings, permissions, virtualization -
-and tells you for each finding **why it matters and how to fix it**.
+ロボット（ROS 2）、モーター制御、ドローン、産業機器、オーディオなど、時間に厳しい処理を Linux で動かしていると、
+「普段は間に合うのに、ときどき遅れる。原因がわからない」という問題がよく起きます。
+rt-doctor は、その原因を2つの方向から調べます。
 
-It is a single static binary with no dependencies: copy it onto a robot, a
-controller or an embedded board and run it.
-
-```text
-$ sudo rtdoctor check
-rt-doctor 0.1.0 - real-time readiness of this system
-
-Summary
-  Biggest factor: Virtual machine - Docker Desktop (linuxkit)
-    As long as this system runs in a virtual machine, the hypervisor can pause it at any time. The
-    other fixes help, but cannot bring deadline misses to zero; measure on bare metal.
-  Then: Kernel preemption model (high), Isolated CPUs (medium), Transparent huge pages (low)
-
-Checks
-  WARN high     Kernel preemption model                  full preemption (not PREEMPT_RT)
-        Why: Most kernel code can be preempted, but interrupt handlers, softirqs and spinlocks still
-            run without preemption; worst-case latencies are typically hundreds of microseconds to
-            milliseconds.
-        Fix: Use a PREEMPT_RT kernel (mainline since Linux 6.12: CONFIG_PREEMPT_RT=y; Ubuntu:
-            linux-realtime; Debian: linux-image-rt-*). ...
-  WARN critical Virtual machine                          Docker Desktop (linuxkit)
-  WARN medium   Isolated CPUs                            none
-  INFO          Interrupts on isolated CPUs              not applicable (no isolated CPUs)
-  INFO          CPU frequency scaling                    no cpufreq (fixed frequency, or managed by firmware/hypervisor)
-  INFO          Deep CPU idle states                     no cpuidle states exposed
-  PASS          Simultaneous multithreading              not supported
-  INFO          Real-time throttling                     950000 us per 1000000 us
-  WARN low      Transparent huge pages                   always
-  INFO          Swap                                     on: /var/lib/swap (0 MiB used of 1023 MiB)
-  PASS          Clock source                             arch_sys_counter
-  PASS          Permission to use real-time priorities   root
-  PASS          Permission to lock memory                root
-
-  0 fail, 4 warn, 4 pass, 5 info
-```
-
-The summary puts the finding with the largest effect first. Each finding has
-an impact:
-
-| Impact | Meaning | Examples |
+| | 調べること | たとえ |
 |---|---|---|
-| critical | Cannot be fixed by tuning this system | Running in a virtual machine |
-| high | Milliseconds or more, or real-time priorities unusable | Kernel without PREEMPT_RT, no permission for SCHED_FIFO |
-| medium | Tens of microseconds to a few milliseconds | No isolated CPUs, interrupts on isolated CPUs, deep idle states, frequency scaling, swap in use |
-| low | Only under particular conditions | Transparent huge pages, SMT, swap configured but unused |
+| **システムの診断**（`check`） | カーネル、CPU の隔離、割り込み、省電力、メモリ、権限、仮想マシンなど、遅れの原因になる**設定** | 健康診断 |
+| **遅れの原因調査**（`trace`） | 指定したプログラムが待たされていた間に、その CPU で**実際に何が動いていたか**（他のプログラム、割り込みなど） | 心電図 |
 
-Where it matters, a check looks at actual use, not only the configuration:
-swap that is configured but unused is reported as INFO, swap in use as WARN.
+結果は、**なぜ問題なのか**と**どう直すか**と一緒に示します。HTML のレポート（日本語対応）にまとめて、人に渡すこともできます。
 
-## Who it is for
+依存ライブラリのない、ファイル1つのプログラムです。ロボットや組み込みボードにコピーするだけで動きます。
 
-Teams that run time-critical work on Linux: robotics (ROS 2), motion
-control, drones, industrial automation, audio, test and measurement. The
-typical situation: "it misses a deadline now and then, and we don't know
-why".
-
-## Checks
-
-| Check | Looks at |
-|---|---|
-| Kernel preemption model | `PREEMPT_RT`, full / voluntary / none preemption |
-| Virtual machine | Docker Desktop, WSL 2, KVM/QEMU, VMware, Hyper-V, ... - hypervisor pauses cannot be fixed from inside |
-| Isolated CPUs | `isolcpus`, `nohz_full`, `rcu_nocbs` |
-| Interrupts on isolated CPUs | IRQ affinity of every interrupt |
-| CPU frequency scaling | cpufreq governor per CPU |
-| Deep CPU idle states | Exit latency of the deepest enabled cpuidle state |
-| Simultaneous multithreading | SMT / hyper-threading siblings |
-| Real-time throttling | `sched_rt_runtime_us` |
-| Transparent huge pages | THP mode |
-| Swap | Active swap devices |
-| Clock source | TSC / architected timer vs. slow clocks |
-| Permission to use real-time priorities | `RLIMIT_RTPRIO`, root |
-| Permission to lock memory | `RLIMIT_MEMLOCK`, root |
-
-Some values are only visible with root (e.g. the preemption mode of
-`PREEMPT_DYNAMIC` kernels in debugfs); run with `sudo` for the full picture.
-
-## Install
-
-One static binary for x86-64 or arm64 Linux, with no dependencies: it runs on
-any distribution (tested on Ubuntu, Debian 11, Fedora, Amazon Linux 2, Alpine
-and BusyBox), on robots, boards and servers alike.
+## すぐに使う
 
 ```bash
 curl -fsSL https://github.com/naosyke/rt-doctor/releases/latest/download/install.sh | sh
+sudo rtdoctor
 ```
 
-The script picks the build for the machine, checks it against the published
-SHA256SUMS and installs it to `/usr/local/bin` (`PREFIX=...` to change). Or
-download `rtdoctor-linux-x86_64.tar.gz` / `rtdoctor-linux-arm64.tar.gz` from
-the [releases](https://github.com/naosyke/rt-doctor/releases) yourself.
+`sudo rtdoctor` とだけ打つと、質問に答えていくだけで最後まで進む**対話モード**になります。
 
-## Usage
+```text
+[1/3] このシステムを診断しています…
+  一番の要因: カーネルのプリエンプション方式 - プリエンプション: なし、または voluntary
+  次に:       隔離CPU - なし
 
-```bash
-rtdoctor check                  # report for people
-rtdoctor check --verbose        # also explain PASS / INFO items
-rtdoctor check --json           # report for tools (with "impact" and an ordered "priorities" list)
-rtdoctor check --fail-on warn   # exit code 1 on any warning, for CI
+[2/3] 遅れを調べたいプログラムを選びます。動いているプログラムを1秒間観察しています…
+   1) ros2_node        pid 1826    リアルタイム FIFO 80、1秒に 1000 回起きる（約 1.0 ms ごと）、スレッド control_loop
+   2) planner          pid 1902    1秒に 100 回起きる（約 10.0 ms ごと）
+  番号・pid・名前のどれかを入力（Enter で飛ばす）: 1
+  期限は何 ms ですか？ふつうは周期と同じです [1.0]:
+  何秒間見張りますか？ [10]:
+
+  スレッド control_loop: 10000 回実行、期限切れ 41 回、最悪 3.20 ms
+  一番の原因: タスク ros2_logger (pid 2210)、38.20 ms
+  対策: … そのタスクを別の CPU に移す（taskset、cgroup の cpuset）か、遅れたタスクにリアルタイム優先度を付けて（chrt -f）…
+
+[3/3] レポートを作っています…
+  /home/robot/rtdoctor-report-20261012-101500.html
 ```
 
-Exit codes: 0 = no failures (or warnings with `--fail-on warn`), 1 = findings
-at or above the threshold, 2 = usage error, 3 = tracing unavailable (`trace`; `report` notes it in the
-page instead).
+手順の詳しい説明、結果の読み方、よくあるつまずきは **[使い方ガイド](docs/guide.md)** にまとめています。
 
-## Trace: who delayed my task?
+## コマンド一覧
 
-`rtdoctor check` says what is wrong with the system. `rtdoctor trace` watches
-a running task and says **what ran on its CPU while it was ready but had to
-wait** - another task, an interrupt, a softirq, or the CPU waking from idle.
+| やりたいこと | コマンド |
+|---|---|
+| 質問に答えながら全部やる | `sudo rtdoctor` |
+| システムの診断 | `sudo rtdoctor check` |
+| プログラムを遅らせた原因の調査 | `sudo rtdoctor trace --pid PID --deadline-ms 期限` |
+| 名前で指定して調査 | `sudo rtdoctor trace --comm スレッド名 ...` |
+| HTML レポート（日本語） | `sudo rtdoctor report --lang ja -o report.html [--pid PID ...]` |
+| ほかのツールで処理する | `check` / `trace` に `--json` |
+| 自動テスト（CI）で設定の劣化を検知 | `rtdoctor check --fail-on warn` |
+
+終了コード: 0 = 問題なし（`--fail-on warn` なら警告もなし）、1 = 基準以上の問題あり、2 = 使い方の誤り、
+3 = トレースが使えない（`trace` のみ。`report` ではレポートの中に書きます）。
+
+ターミナルの表示は英語、対話モードとレポートは日本語に対応しています（対話モードは環境の言語設定 `LANG` に従い、
+`--lang ja` / `--lang en` で切り替えられます）。
+
+## システムの診断で見る項目
+
+| 項目 | 見るもの | 影響の大きさ |
+|---|---|---|
+| 仮想マシン | Docker Desktop、WSL 2、KVM/QEMU、VMware、Hyper-V など。仮想マシンの一時停止は中からは防げない | 致命的 |
+| カーネルのプリエンプション方式 | `PREEMPT_RT`、full / voluntary / none | 大 |
+| リアルタイム優先度の使用権限 | `RLIMIT_RTPRIO`、root | 大 |
+| 隔離CPU | `isolcpus`、`nohz_full`、`rcu_nocbs` | 中 |
+| 隔離CPUへの割り込み | すべての割り込みの割り当て先 | 中 |
+| CPU周波数の制御 | CPU ごとの cpufreq governor | 中 |
+| CPUの深い休止状態 | 有効な一番深い休止状態からの復帰時間 | 中 |
+| メモリロックの権限 | `RLIMIT_MEMLOCK`、root | 中 |
+| スワップ | 設定だけでなく**実際の使用量**も見る（使用中なら警告、未使用なら参考情報） | 中／小 |
+| Transparent Huge Pages | THP のモード | 小 |
+| SMT（ハイパースレッディング） | 1つのコアを2つのスレッドで共有しているか | 小 |
+| リアルタイム処理の上限 | `sched_rt_runtime_us` | 小 |
+| クロックソース | TSC／アーキテクチャタイマーか、遅い時計か | 小 |
+
+判定は4段階です。
+
+| 判定 | 意味 |
+|---|---|
+| PASS | リアルタイム向けの良い設定。何もしなくてよい |
+| INFO | それだけでは問題ではない参考情報（安全装置、条件次第のもの、対象外、確認できないもの） |
+| WARN | 遅れの原因になりうる。直した方がよい |
+| FAIL | このままではリアルタイム処理がまともに動かない |
+
+結果の先頭には、**影響が一番大きい問題**を出します（「まずこれを直す」）。root でないと見えない値もあるので、`sudo` で実行してください。
+
+## 遅れの原因調査の例
+
+同じ CPU で計算し続けるプログラム（hog）に邪魔されている、10 ms 周期のプログラムを調べた例です。
 
 ```bash
 sudo rtdoctor trace --pid 1826 --duration 5 --deadline-ms 4
 ```
 
-```
-rt-doctor trace - pid 1826 (periodic, 1 threads), 5.1 s, deadline 4.00 ms
-
+```text
 Thread periodic (tid 1826): 500 activations, 3 over the deadline
   Response time (wake-up to sleep): median 2.92 ms, 99th 3.91 ms, max 5.92 ms
   Waiting for its CPU: 504 times, 464.06 ms in total, max 3.00 ms (4 preemptions)
@@ -132,59 +109,52 @@ Thread periodic (tid 1826): 500 activations, 3 over the deadline
   Who delayed it (ran on its CPU while it was ready)
      460.23 ms  task hog (pid 1825)                             502 times
        2.16 ms  irq 11 arch_timer                               503 times
-       0.51 ms  irq 6 IPI                                       189 times
-    -> Another task ran on the task's CPU while it was ready. Move that task to
-       another CPU (taskset, cgroup cpuset), or give the delayed task a
+    -> Another task ran on the task's CPU while it was ready. ... give the delayed task a
        real-time priority (chrt -f) so it preempts the other one.
 ```
 
-Following the advice (`chrt -f 50`) on the same machine:
+アドバイスどおり `chrt -f 50`（リアルタイム優先度）を付けて、同じ条件で測り直した結果です。
 
-| | before | after `chrt -f 50` |
+| | 対策前 | `chrt -f 50` 後 |
 |---|---|---|
-| over the 4 ms deadline | 3 of 500 | 0 of 500 |
-| response max | 5.92 ms | 2.07 ms |
-| waiting in total | 464 ms | 4.2 ms |
-| time taken by `hog` | 460 ms | 3.3 ms |
+| 期限（4 ms）切れ | 500回中 3回 | 500回中 0回 |
+| 最悪の応答時間 | 5.92 ms | 2.07 ms |
+| CPU の空き待ちの合計 | 464 ms | 4.2 ms |
+| そのうち hog が原因 | 460 ms | 3.3 ms |
 
-How it works: a private ftrace instance (it does not disturb other tracers)
-records `sched_switch`, `sched_waking`, `sched_migrate_task` and the
-irq / softirq entry and exit events. Each wait of the target is split among
-whatever was running on its CPU at the time. The report also lists the worst
-activations with their own breakdown.
+仕組み: ほかのトレースツールの邪魔をしない専用の ftrace インスタンスで、スケジューラ（`sched_switch`、`sched_waking`、
+`sched_migrate_task`）と割り込み（irq / softirq）の記録を取ります。対象が「動ける状態なのに待たされていた時間」を、
+その間にその CPU で動いていたものごとに振り分けています。
 
-```bash
-rtdoctor trace --pid N            # all threads of a process
-rtdoctor trace --comm NAME        # threads by name (as in /proc/*/task/*/comm)
-  --duration 10 --deadline-ms 2 --threads 3 --json
-```
-
-Needs root (or tracefs access). Inside a container, select by `--comm` or
-run the container with `--pid=host`: process ids in a container's PID
-namespace are not the ones the kernel traces.
-
-## Report: one file to share
+## レポート
 
 ```bash
-sudo rtdoctor report -o report.html                                   # checks only
-sudo rtdoctor report -o report.html --pid 1826 --duration 10 --deadline-ms 4   # checks + trace
-sudo rtdoctor report -o report.html --lang ja                         # in Japanese (日本語)
+sudo rtdoctor report --lang ja -o report.html --pid 1826 --duration 10 --deadline-ms 4
 ```
 
-`report.html` is a single self-contained page (no scripts, nothing loaded
-from the internet; light and dark mode; prints well) to attach to a ticket or
-send to a customer or colleague:
+`report.html` は、それだけで完結する1枚のページです（スクリプトなし、ネット接続不要、ライトモードとダークモードに対応、
+印刷可）。チケットに添付したり、お客さんや同僚に送ったりできます。
 
-* the machine (host, kernel, CPU) and the **biggest factor** first
-* for the traced task: response time histogram with the deadline, **who
-  delayed it** as bars with what to do, and the worst activations split into
-  running time and what it waited for
-* every check, findings first, ordered by impact
+* マシンの情報と、**一番の要因**
+* 調査したプログラムの応答時間の分布（期限の線つき）、**誰が遅らせたか**と対策、時間がかかった回ワーストの内訳
+* すべての診断項目（問題のあるものから、影響の大きい順）
 
-`--lang ja` writes the whole page in Japanese, including every explanation,
-fix and piece of advice.
+## インストール
 
-## Build
+x86-64 用と arm64 用の静的バイナリがあり、どの Linux ディストリビューションでも動きます
+（Ubuntu、Debian 11、Fedora、Amazon Linux 2、Alpine、BusyBox で確認済み）。
+
+```bash
+curl -fsSL https://github.com/naosyke/rt-doctor/releases/latest/download/install.sh | sh
+```
+
+スクリプトは、マシンに合う版を選び、公開されている SHA256SUMS で改ざんがないか確認してから `/usr/local/bin` に入れます
+（`PREFIX=...` で場所を変更可）。[リリースページ](https://github.com/naosyke/rt-doctor/releases)から
+`rtdoctor-linux-x86_64.tar.gz` / `rtdoctor-linux-arm64.tar.gz` を直接ダウンロードしても使えます。
+
+アンインストールは `sudo rm /usr/local/bin/rtdoctor` です。
+
+## ビルド
 
 ```bash
 docker build --target base -t rtdoctor-base .
@@ -192,39 +162,36 @@ docker run --rm -v "$PWD":/workspace rtdoctor-base bash -c \
   "cmake -S . -B build -G Ninja -DRTDOCTOR_STATIC=ON && cmake --build build && ctest --test-dir build"
 ```
 
-The result is `build/rtdoctor`, a static binary (about 2.5 MB). The checks
-are tested against fake `/proc` and `/sys` trees of typical machines (a tuned
-real-time machine, a desktop, Docker Desktop, a machine with interrupts on
-isolated CPUs).
+`build/rtdoctor`（約 2 MB の静的バイナリ）ができます。診断項目は、典型的なマシン（調整済みのリアルタイム機、普通の
+デスクトップ、Docker Desktop、隔離CPUに割り込みがあるマシン）を模した偽の `/proc`・`/sys` でテストしています。
+トレースと対話モードの実地テスト（周期プログラムと邪魔役を同じ CPU で動かし、邪魔役を名指しできるか）は、ftrace が
+使える環境（root。コンテナなら `--privileged`）で動き、それ以外では飛ばします。
 
-### Releasing
+### リリース
 
-CI builds and tests on x86-64 and arm64 for every push (as root, so the ftrace
-end-to-end tests run as well). To publish a release, set the version in
-`CMakeLists.txt` and push a matching tag:
+CI は push のたびに x86-64 と arm64 でビルドとテストをします（root で実行するので、実地テストも含みます）。
+公開するときは、`CMakeLists.txt` のバージョンを上げてから、同じ番号のタグを push します。
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
-The release workflow builds both binaries with `scripts/package.sh` (which
-refuses a tag that does not match the version), and publishes them with
-`SHA256SUMS` and `install.sh`.
+リリース用のワークフローが `scripts/package.sh` で両方のバイナリを作り（タグとバージョンが違えば止まります）、
+`SHA256SUMS` と `install.sh` と一緒に公開します。
 
-## Roadmap
+## ロードマップ
 
-* [x] `rtdoctor check` - system configuration
-* [ ] `rtdoctor latency` - wake-up latency per CPU (built-in, no cyclictest needed)
-* [x] `rtdoctor trace --pid N` - when a task is late, **which other task or interrupt was running on its CPU**
-* [x] `rtdoctor report` - everything in one shareable HTML file
-* [x] Release binaries for x86-64 and arm64 (built by GitHub Actions on tags)
+* [x] `rtdoctor check` - システムの設定の診断
+* [x] `rtdoctor trace` - プログラムが遅れたとき、**その CPU で何が動いていたか**
+* [x] `rtdoctor report` - すべてを1つの HTML にまとめて共有（日本語対応）
+* [x] x86-64 / arm64 の配布用バイナリ（タグで GitHub Actions が作成）
+* [x] 対話モード（`sudo rtdoctor`）
+* [ ] `rtdoctor latency` - CPU ごとの起床遅延の測定を内蔵（cyclictest 不要）
 
-## License
+## ライセンス
 
-rt-doctor is open source under the [Apache License 2.0](LICENSE): free to
-use, modify and ship, also commercially. Copyright 2026 naosyke.
+[Apache License 2.0](LICENSE) のオープンソースです。商用も含めて、自由に使用・改変・配布できます。Copyright 2026 naosyke.
 
-Built only on public Linux interfaces and documentation (procfs, sysfs,
-ftrace, kernel docs). Independent personal project, not affiliated with any
-employer.
+公開されている Linux のインターフェースと資料（procfs、sysfs、ftrace、カーネルのドキュメント）だけをもとに作った、
+個人のプロジェクトです。どの勤務先とも関係ありません。

@@ -7,17 +7,11 @@
 //   rtdoctor trace --pid 1234 --deadline-ms 4
 //   rtdoctor trace --comm brake --duration 30
 //   rtdoctor report -o report.html --comm brake --deadline-ms 4
-#include <signal.h>
-#include <sys/utsname.h>
+//   rtdoctor                       guided mode (also: rtdoctor wizard)
 #include <unistd.h>
 
-#include <atomic>
-#include <chrono>
 #include <cstring>
-#include <ctime>
-#include <fstream>
 #include <iostream>
-#include <set>
 #include <string>
 
 #include "rtdoctor/analyzer.hpp"
@@ -25,7 +19,9 @@
 #include "rtdoctor/ftrace.hpp"
 #include "rtdoctor/html_report.hpp"
 #include "rtdoctor/output.hpp"
+#include "rtdoctor/session.hpp"
 #include "rtdoctor/trace_report.hpp"
+#include "rtdoctor/wizard.hpp"
 
 #ifndef RTDOCTOR_VERSION
 #define RTDOCTOR_VERSION "dev"
@@ -34,7 +30,9 @@
 namespace {
 
 int usage() {
-    std::cerr << "usage: rtdoctor check [--json] [--verbose] [--fail-on warn|fail] [--root DIR]\n"
+    std::cerr << "usage: rtdoctor                  (guided: check, pick a program, trace, report)\n"
+                 "       rtdoctor wizard [--lang en|ja]\n"
+                 "       rtdoctor check [--json] [--verbose] [--fail-on warn|fail] [--root DIR]\n"
                  "       rtdoctor trace (--pid PID | --comm NAME) [--duration SECONDS] [--deadline-ms MS]\n"
                  "                      [--threads N] [--json]\n"
                  "       rtdoctor report [-o FILE] [--pid PID | --comm NAME] [--duration SECONDS]\n"
@@ -43,92 +41,8 @@ int usage() {
     return 2;
 }
 
-std::atomic<bool> stop_requested{false};
-
-// What to trace and for how long; shared by `trace` and `report`.
-struct TraceRequest {
-    int pid = 0;
-    std::string comm;
-    double duration = 10, deadline_ms = 0;
-    std::size_t max_threads = 3;
-
-    bool wanted() const { return pid > 0 || !comm.empty(); }
-    bool valid() const { return (pid > 0) != !comm.empty() && duration > 0; }
-
-    // Consumes a trace option at argv[i]; false if it is not one.
-    bool parse(int argc, char** argv, int& i) {
-        const std::string arg = argv[i];
-        if (i + 1 >= argc) return false;
-        if (arg == "--pid") pid = std::atoi(argv[++i]);
-        else if (arg == "--comm") comm = argv[++i];
-        else if (arg == "--duration") duration = std::atof(argv[++i]);
-        else if (arg == "--deadline-ms") deadline_ms = std::atof(argv[++i]);
-        else if (arg == "--threads") max_threads = static_cast<std::size_t>(std::atoi(argv[++i]));
-        else return false;
-        return true;
-    }
-};
-
-// Traces the target. Returns the exit code for a usage error (2) or 0; an
-// unavailable ftrace is reported in result.error.
-int run_trace(const TraceRequest& request, bool quiet, rtdoctor::TraceResult& result) {
-    auto& summary = result.summary;
-    summary.deadline = request.deadline_ms / 1000.0;
-    rtdoctor::LatencyAnalyzer::Filter filter;
-    if (request.pid > 0) {
-        // Trace events carry the kernel's (initial namespace) thread ids. In a
-        // container's PID namespace the numbers differ and cannot be mapped,
-        // so refuse instead of silently tracing nothing. On the host, pid 2 is
-        // always the kernel thread kthreadd.
-        const rtdoctor::SystemView proc("/proc");
-        if (proc.read_line("2/comm").value_or("") != "kthreadd") {
-            std::cerr << "rtdoctor: this shell is in a container's PID namespace, where process ids differ from\n"
-                         "the ones the kernel traces. Run rtdoctor on the host (or with docker run --pid=host),\n"
-                         "or select the target by thread name with --comm NAME.\n";
-            return 2;
-        }
-        const auto name = proc.read_line(std::to_string(request.pid) + "/comm");
-        if (!name) {
-            std::cerr << "rtdoctor: no process with pid " << request.pid << "\n";
-            return 2;
-        }
-        std::set<int> tids;
-        for (const auto& tid : proc.list(std::to_string(request.pid) + "/task")) tids.insert(std::atoi(tid.c_str()));
-        summary.target =
-            "pid " + std::to_string(request.pid) + " (" + *name + ", " + std::to_string(tids.size()) + " threads)";
-        filter = [tids](int tid, const std::string&) { return tids.count(tid) > 0; };
-    } else {
-        const std::string name = request.comm.substr(0, 15);  // The kernel keeps 15 characters.
-        summary.target = "threads named \"" + name + "\"";
-        filter = [name](int, const std::string& thread) { return thread == name; };
-    }
-
-    auto session = rtdoctor::FtraceSession::start(rtdoctor::latency_events(), 16384, result.error);
-    if (!session) return 0;
-    signal(SIGINT, [](int) { stop_requested = true; });
-    signal(SIGTERM, [](int) { stop_requested = true; });
-    if (!quiet) {
-        std::cerr << "Tracing " << summary.target << " for " << request.duration << " s (Ctrl-C to stop early)...\n";
-    }
-
-    rtdoctor::AnalyzerOptions options;
-    options.deadline = summary.deadline;
-    rtdoctor::LatencyAnalyzer analyzer(filter, options);
-    const auto start = std::chrono::steady_clock::now();
-    session->run(
-        std::chrono::duration<double>(request.duration),
-        [&](const std::string& line) {
-            if (const auto event = rtdoctor::parse_trace_line(line)) analyzer.feed(*event);
-        },
-        [] { return !stop_requested; });
-    summary.duration = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-    summary.lost_events = session->lost_events();
-    result.threads = analyzer.reports();
-    return 0;
-}
-
 int trace(int argc, char** argv) {
-    TraceRequest request;
+    rtdoctor::TraceRequest request;
     bool json = false;
     for (int i = 0; i < argc; ++i) {
         if (std::strcmp(argv[i], "--json") == 0) json = true;
@@ -137,7 +51,7 @@ int trace(int argc, char** argv) {
     if (!request.valid()) return usage();
 
     rtdoctor::TraceResult result;
-    if (const int code = run_trace(request, json, result)) return code;
+    if (!rtdoctor::run_trace(request, json, result)) return 2;
     if (!result.error.empty()) {
         std::cerr << "rtdoctor: " << result.error << "\n";
         return 3;
@@ -151,7 +65,7 @@ int trace(int argc, char** argv) {
 }
 
 int report(int argc, char** argv) {
-    TraceRequest request;
+    rtdoctor::TraceRequest request;
     std::string output = "rtdoctor-report.html", root = "/";
     rtdoctor::Lang lang = rtdoctor::Lang::En;
     for (int i = 0; i < argc; ++i) {
@@ -172,32 +86,27 @@ int report(int argc, char** argv) {
     std::optional<rtdoctor::TraceResult> traced;
     if (request.wanted()) {
         traced.emplace();
-        if (const int code = run_trace(request, false, *traced)) return code;
+        if (!rtdoctor::run_trace(request, false, *traced)) return 2;
         if (!traced->error.empty()) std::cerr << "rtdoctor: tracing not possible: " << traced->error << "\n";
     }
 
-    auto host = rtdoctor::read_host_info(system);
-    utsname name{};
-    if (uname(&name) == 0) host.machine = name.machine;
-    host.version = RTDOCTOR_VERSION;
-    char generated[64];
-    const std::time_t now = std::time(nullptr);
-    std::strftime(generated, sizeof(generated), "%Y-%m-%d %H:%M:%S %Z", std::localtime(&now));
-    host.generated = generated;
-
-    std::ofstream file(output);
-    if (!file) {
-        std::cerr << "rtdoctor: cannot write " << output << "\n";
-        return 2;
-    }
-    rtdoctor::print_html(file, host, results, traced, request.max_threads, lang);
-    file.close();
-    if (!file) {
-        std::cerr << "rtdoctor: cannot write " << output << "\n";
-        return 2;
-    }
+    if (!rtdoctor::write_report(output, system, results, traced, request.max_threads, lang, RTDOCTOR_VERSION)) return 2;
     std::cerr << "Wrote " << output << "\n";
     return 0;
+}
+
+int wizard(int argc, char** argv) {
+    rtdoctor::Lang lang = rtdoctor::lang_from_environment();
+    for (int i = 0; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--lang") == 0 && i + 1 < argc) {
+            const auto parsed = rtdoctor::parse_lang(argv[++i]);
+            if (!parsed) return usage();
+            lang = *parsed;
+        } else {
+            return usage();
+        }
+    }
+    return rtdoctor::run_wizard(std::cin, std::cout, lang, RTDOCTOR_VERSION);
 }
 
 int check(int argc, char** argv) {
@@ -239,5 +148,8 @@ int main(int argc, char** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "check") == 0) return check(argc - 2, argv + 2);
     if (argc >= 2 && std::strcmp(argv[1], "trace") == 0) return trace(argc - 2, argv + 2);
     if (argc >= 2 && std::strcmp(argv[1], "report") == 0) return report(argc - 2, argv + 2);
+    if (argc >= 2 && std::strcmp(argv[1], "wizard") == 0) return wizard(argc - 2, argv + 2);
+    // Without a command, someone at a terminal gets the guided mode.
+    if (argc == 1 && isatty(STDIN_FILENO)) return wizard(0, argv);
     return usage();
 }
